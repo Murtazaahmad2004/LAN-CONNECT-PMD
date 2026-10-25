@@ -3,6 +3,10 @@ from tkinter import messagebox
 import tkinter as tk
 import style
 import register
+import sqlite3
+import hashlib
+import hmac
+import home
 
 win = tk.Tk()
 win.title("Login Screen")
@@ -37,18 +41,81 @@ entryUser = tk.Entry(
     relief="flat"
 )
 
+def verify_password(entered_password, stored_password):
+    try:
+        salt_hex, hash_hex = stored_password.split(":", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected_hash = bytes.fromhex(hash_hex)
+
+        actual_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            entered_password.encode("utf-8"),
+            salt,
+            200000
+        )
+
+        return hmac.compare_digest(actual_hash, expected_hash)
+
+    except (ValueError, TypeError):
+        return False
+    
 def check():
-    username = entryUser.get().strip()
-    password = entrypassword.get().strip()
-    
-    if username == "Email"  or password == "Password":
-        messagebox.showwarning("Missing Information", "Please Enter Email and Password")
+    email = entryUser.get().strip().lower()
+    password = entrypassword.get()
+
+    if (
+        not email
+        or email == "Email"
+        or not password
+        or password == "Password"
+    ):
+        messagebox.showwarning(
+            "Missing Information",
+            "Please enter your email and password.",
+            parent=win
+        )
         return
-    
-    if username == "admin" and password == "1234":
-        messagebox.showinfo("Login Info", ("Login Successful"))
-    else:
-        messagebox.showerror("Login Info", "Login Failed. Please Check Username and Password")
+
+    conn = None
+
+    try:
+        conn = sqlite3.connect("lan_connect_project.db")
+        c = conn.cursor()
+
+        c.execute(
+            "SELECT password FROM register WHERE email = ?",
+            (email,)
+        )
+
+        user = c.fetchone()
+
+        if user is not None and verify_password(password, user[0]):
+            messagebox.showinfo(
+                "Login Successful",
+                "Login successful!",
+                parent=win
+            )
+
+            win.destroy()
+            home.home_page()
+
+        else:
+            messagebox.showerror(
+                "Login Failed",
+                "Incorrect email or password.",
+                parent=win
+            )
+
+    except sqlite3.Error as e:
+        messagebox.showerror(
+            "Database Error",
+            f"Could not access the database:\n{e}",
+            parent=win
+        )
+
+    finally:
+        if conn is not None:
+            conn.close()
         
 def add_placeholder_email(entry, placeholder):
     placeholder_color = "#2D3642"
@@ -140,10 +207,10 @@ entrypassword = tk.Entry(
 entrypassword.pack(pady=(3, 0))
 add_placeholder_password(entrypassword, "Password")
 
-btn = tk.Button(card, text="Login", command=check)
-btn.pack(pady=10)
+btn = tk.Button(card, text="Login", command=home.home_page)
+btn.pack(side="left", padx=4, pady=15)
 
 btn = tk.Button(card, text="Register", command=register.open_register)
-btn.pack(pady=5)
+btn.pack(side="right", padx=3, pady=15)
 
 win.mainloop()
