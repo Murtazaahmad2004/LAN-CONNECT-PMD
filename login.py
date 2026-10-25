@@ -207,7 +207,7 @@ entrypassword = tk.Entry(
 entrypassword.pack(pady=(3, 0))
 add_placeholder_password(entrypassword, "Password")
 
-btn = tk.Button(card, text="Login", command=home.home_page)
+btn = tk.Button(card, text="Login", command=check)
 btn.pack(side="left", padx=4, pady=15)
 
 btn = tk.Button(card, text="Register", command=register.open_register)

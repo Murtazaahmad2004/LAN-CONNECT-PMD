@@ -77,6 +77,4 @@ def home_page():
     )
     subtitle.pack(anchor="w")
 
-   
-
     win.mainloop()
