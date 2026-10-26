@@ -9,7 +9,7 @@ import hmac
 import home
 
 win = tk.Tk()
-win.title("Login Screen")
+win.title("Login")
 win.configure(bg=style.BG)
 
 # Login Card
@@ -19,10 +19,14 @@ card = tk.Frame(
     padx=38,
     pady=28,
     highlightbackground=style.BORDER,
-    highlightthickness=1
+    highlightthickness=1,
 )
-
-card.pack(pady=20)
+card.place(
+    relx=0.5,
+    rely=0.5,
+    anchor="center",
+    height=300
+)
 
 heading = tk.Label(
     card,

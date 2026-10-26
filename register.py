@@ -4,10 +4,8 @@ import secrets
 import tkinter as tk
 from tkinter import messagebox
 import style
-import home
 
 DB_NAME = "lan_connect_project.db"
-
 
 # Create database and table if they do not exist
 def create_database():
@@ -51,7 +49,7 @@ def open_register():
         return
 
     win = tk.Toplevel()
-    win.title("Register Screen")
+    win.title("Register")
     win.geometry(style.WINDOW_SIZE)
     win.configure(bg=style.BG)
 
