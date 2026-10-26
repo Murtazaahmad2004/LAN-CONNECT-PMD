@@ -1,13 +1,21 @@
-
 import tkinter as tk
 from tkinter import ttk, filedialog
 import style
+import time
+
 
 def open_settings():
     screen = tk.Toplevel()
     screen.title("Settings")
     screen.geometry("850x500")
     screen.configure(bg=style.BG)
+
+    # Main application window
+    main_window = screen.master
+
+    # Timer variables
+    minimized_since = None
+    away_timer_id = None
 
     # Notebook / Tabs
     notebook = ttk.Notebook(screen)
@@ -19,24 +27,21 @@ def open_settings():
     transfer_tab = tk.Frame(notebook, bg=style.BG)
     logging_tab = tk.Frame(notebook, bg=style.BG)
     hotkeys_tab = tk.Frame(notebook, bg=style.BG)
-
     general_tab = tk.Frame(notebook, bg=style.BG)
     user_tab = tk.Frame(notebook, bg=style.BG)
     messaging_tab = tk.Frame(notebook, bg=style.BG)
 
-    # Top row tabs
+    # Tabs
     notebook.add(general_tab, text="General")
     notebook.add(user_tab, text="User Information")
     notebook.add(messaging_tab, text="Messaging")
-
-    # Second row tabs
     notebook.add(sound_tab, text="Sound Events")
     notebook.add(network_tab, text="Network")
     notebook.add(transfer_tab, text="File Transfer")
     notebook.add(logging_tab, text="Logging")
     notebook.add(hotkeys_tab, text="Hot Keys")
 
-    # Helper function for tab headings
+    # Heading helper
     def heading(parent, text):
         tk.Label(
             parent,
@@ -49,42 +54,131 @@ def open_settings():
     # General tab
     heading(general_tab, "General Settings")
 
-    start_minimized = tk.BooleanVar(value=False)
-    tk.Checkbutton(
+    tk.Label(
         general_tab,
-        text="Start application minimized",
-        variable=start_minimized,
+        text="User List",
         bg=style.BG,
         fg=style.WHITE,
-        selectcolor=style.CARD,
-        activebackground=style.BG
+        font=("Segoe UI", 10, "bold")
     ).pack(anchor="w", padx=25, pady=8)
 
-    notifications = tk.BooleanVar(value=True)
+    tk.Frame(
+        general_tab,
+        bg=style.BORDER,
+        height=1
+    ).pack(fill="x", padx=25, pady=5)
+
+    choices = tk.BooleanVar(value=True)
+
     tk.Checkbutton(
         general_tab,
-        text="Enable notifications",
-        variable=notifications,
+        text='Change status to "Away" after being inactive',
+        variable=choices,
         bg=style.BG,
         fg=style.WHITE,
         selectcolor=style.CARD,
-        activebackground=style.BG
-    ).pack(anchor="w", padx=25, pady=8)
+        activebackground=style.BG,
+        activeforeground=style.WHITE,
+        highlightthickness=0,
+        takefocus=0
+    ).pack(anchor="w", padx=28, pady=8)
+
+    tk.Label(
+        general_tab,
+        text="Inactive time (minutes)",
+        bg=style.BG,
+        fg=style.WHITE,
+        font=style.LABEL_FONT
+    ).pack(anchor="w", padx=28, pady=(8, 4))
+
+    away_minutes = tk.Entry(
+        general_tab,
+        bg=style.CARD,
+        fg=style.WHITE,
+        insertbackground=style.WHITE,
+        font=style.INPUT_FONT,
+        relief="flat",
+        highlightthickness=1,
+        highlightbackground=style.BORDER,
+        highlightcolor=style.ACCENT
+    )
+    away_minutes.insert(0, "5")
+    away_minutes.pack(fill="x", padx=28, pady=(0, 10))
+
+    # Current status
+    status_label = tk.Label(
+        general_tab,
+        text="Status: Online",
+        bg=style.BG,
+        fg=style.ACCENT,
+        font=style.LABEL_FONT
+    )
+    status_label.pack(anchor="w", padx=28, pady=8)
+
+    # Inactivity timer
+    def check_inactivity():
+        nonlocal minimized_since, away_timer_id
+
+        if not screen.winfo_exists():
+            return
+
+        try:
+            minutes = int(away_minutes.get().strip())
+        except ValueError:
+            status_label.config(text="Status: Enter valid minutes")
+            away_timer_id = screen.after(1000, check_inactivity)
+            return
+
+        if minutes <= 0:
+            status_label.config(text="Status: Enter valid minutes")
+            minimized_since = None
+
+        elif not choices.get():
+            status_label.config(text="Status: Online")
+            minimized_since = None
+
+        else:
+            try:
+                is_minimized = main_window.state() == "iconic"
+            except tk.TclError:
+                is_minimized = False
+
+            if is_minimized:
+                if minimized_since is None:
+                    minimized_since = time.time()
+
+                elapsed = time.time() - minimized_since
+
+                if elapsed >= minutes * 60:
+                    status_label.config(text="Status: Away")
+                else:
+                    status_label.config(text="Status: Online")
+            else:
+                minimized_since = None
+                status_label.config(text="Status: Online")
+
+        away_timer_id = screen.after(1000, check_inactivity)
+
+    check_inactivity()
 
     # User Information tab
     heading(user_tab, "User Information")
 
     tk.Label(
-        user_tab, text="Display Name",
-        bg=style.BG, fg=style.LABEL
+        user_tab,
+        text="Display Name",
+        bg=style.BG,
+        fg=style.LABEL
     ).pack(anchor="w", padx=25)
 
     display_name = tk.Entry(user_tab, font=style.INPUT_FONT)
     display_name.pack(anchor="w", padx=25, pady=8)
 
     tk.Label(
-        user_tab, text="Department",
-        bg=style.BG, fg=style.LABEL
+        user_tab,
+        text="Department",
+        bg=style.BG,
+        fg=style.LABEL
     ).pack(anchor="w", padx=25)
 
     department = ttk.Combobox(
@@ -98,8 +192,10 @@ def open_settings():
     heading(network_tab, "Network Settings")
 
     tk.Label(
-        network_tab, text="Listening Port",
-        bg=style.BG, fg=style.LABEL
+        network_tab,
+        text="Listening Port",
+        bg=style.BG,
+        fg=style.LABEL
     ).pack(anchor="w", padx=25)
 
     port_entry = tk.Entry(network_tab)
@@ -107,6 +203,7 @@ def open_settings():
     port_entry.pack(anchor="w", padx=25, pady=8)
 
     discover_peers = tk.BooleanVar(value=True)
+
     tk.Checkbutton(
         network_tab,
         text="Enable peer discovery",
@@ -122,8 +219,10 @@ def open_settings():
     folder_var = tk.StringVar()
 
     tk.Label(
-        transfer_tab, text="Download Folder",
-        bg=style.BG, fg=style.LABEL
+        transfer_tab,
+        text="Download Folder",
+        bg=style.BG,
+        fg=style.LABEL
     ).pack(anchor="w", padx=25)
 
     folder_frame = tk.Frame(transfer_tab, bg=style.BG)
@@ -149,6 +248,7 @@ def open_settings():
     heading(sound_tab, "Sound Events")
 
     sound_enabled = tk.BooleanVar(value=True)
+
     tk.Checkbutton(
         sound_tab,
         text="Enable sound events",
@@ -162,6 +262,7 @@ def open_settings():
     heading(logging_tab, "Logging Settings")
 
     logging_enabled = tk.BooleanVar(value=True)
+
     tk.Checkbutton(
         logging_tab,
         text="Enable application logging",
@@ -189,6 +290,7 @@ def open_settings():
     heading(messaging_tab, "Messaging Settings")
 
     enter_to_send = tk.BooleanVar(value=True)
+
     tk.Checkbutton(
         messaging_tab,
         text="Press Enter to send messages",
@@ -199,17 +301,34 @@ def open_settings():
     ).pack(anchor="w", padx=25, pady=8)
 
     # Save button
+    def save_settings():
+        print(
+            "Settings values:",
+            display_name.get(),
+            department.get(),
+            port_entry.get(),
+            folder_var.get(),
+            "Away enabled:", choices.get(),
+            "Inactive minutes:", away_minutes.get()
+        )
+
     tk.Button(
         screen,
         text="Save Settings",
         font=style.BUTTON_FONT,
         bg=style.ACCENT,
         fg=style.BLACK,
-        command=lambda: print(
-            "Settings values:",
-            display_name.get(),
-            department.get(),
-            port_entry.get(),
-            folder_var.get()
-        )
+        command=save_settings
     ).pack(pady=(0, 10))
+
+    # Stop timer when settings window closes
+    def close_settings():
+        nonlocal away_timer_id
+
+        if away_timer_id is not None:
+            screen.after_cancel(away_timer_id)
+            away_timer_id = None
+
+        screen.destroy()
+
+    screen.protocol("WM_DELETE_WINDOW", close_settings)

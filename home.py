@@ -108,21 +108,23 @@ def home_page():
     users = c.fetchall()
     conn.close()
 
-    choices = [firstname + " " + lastname for firstname, lastname in users]
-
-    branch_label = tk.Label(
+    tk.Label(
         menu_frame,
-        text="Select a User",
+        text="Registered Users",
         font=("Segoe UI", 10, "bold"),
         bg=style.CARD,
         fg=style.WHITE,
-        anchor="w",
-    )
-    branch_label.pack(anchor=tk.W, padx=10)
-    branch_dropdown = ttk.Combobox(menu_frame, values=choices, state="readonly")
-    branch_dropdown.pack(anchor=tk.W, padx=10)
+        anchor="w"
+    ).pack(anchor="w", padx=10, pady=8)
 
-    if choices:
-        branch_dropdown.current(0)
+    for firstname, lastname in users:
+        tk.Label(
+            menu_frame,
+            text=f"{firstname} {lastname}",
+            font=("Segoe UI", 10),
+            bg=style.CARD,
+            fg=style.WHITE,
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=4)
 
     win.mainloop()
