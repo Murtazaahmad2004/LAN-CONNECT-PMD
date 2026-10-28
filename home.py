@@ -2,6 +2,7 @@ import sqlite3
 import tkinter as tk
 from tkinter import *
 from tkinter import ttk
+from discovery import LANDiscovery
 import style
 import settings
 # import received_files
@@ -44,58 +45,69 @@ def create_chat_table():
     finally:
         conn.close()
         
-def open_chat(firstname, lastname, email):
-    chat = tk.Toplevel()
-    chat.title(f"Chat with {firstname} {lastname}")
-    chat.geometry(style.WINDOW_SIZE)
-    chat.configure(bg=style.BG)
+def open_chat(parent, firstname, lastname, email):
 
-    header = tk.Frame(chat, bg=style.CARD)
+    # Right side
+    for widget in parent.winfo_children():
+        widget.destroy()
+
+    # Chat header
+    header = tk.Frame(parent, bg=style.CARD)
     header.pack(fill="x")
+
     tk.Label(
         header,
-        text=f"💬 {firstname} {lastname}",
+        text=f"💬  {firstname} {lastname}",
         font=("Segoe UI", 13, "bold"),
         bg=style.CARD,
-        fg=style.WHITE,
+        fg=style.WHITE
     ).pack(side="left", padx=15, pady=15)
 
+    # Messages display area
     conversation = tk.Text(
-        chat,
+        parent,
         bg=style.BG,
         fg=style.WHITE,
         font=("Segoe UI", 10),
         wrap="word",
         state="disabled",
-        relief="flat",
+        relief="flat"
     )
-    conversation.pack(fill="both", expand=True, padx=10, pady=10)
+    conversation.pack(
+        fill="both",
+        expand=True,
+        padx=10,
+        pady=10
+    )
 
-    conn = sqlite3.connect("lan_connect_project.db")
+    # Selected user ki saved conversation load karna
+    conn = sqlite3.connect(DB_NAME)
+
     try:
         c = conn.cursor()
         c.execute("""
-                SELECT sender, message 
-                FROM messages 
-                WHERE receiver = ?    
-                ORDER BY id ASC      
-            """, (email,))
-        mesg = c.fetchall()
+            SELECT sender, message
+            FROM messages
+            WHERE receiver = ?
+            ORDER BY id ASC
+        """, (email,))
+        messages = c.fetchall()
     finally:
         conn.close()
-    
+
     conversation.config(state="normal")
-    
-    for sender, message in mesg:
-       conversation.insert(
+
+    for sender, message in messages:
+        conversation.insert(
             "end",
             f"{sender}: {message}\n\n"
-    )
-       
+        )
+
     conversation.config(state="disabled")
     conversation.see("end")
-            
-    bottom_frame = tk.Frame(chat, bg=style.CARD)
+
+    # Bottom input area
+    bottom_frame = tk.Frame(parent, bg=style.CARD)
     bottom_frame.pack(fill="x", padx=10, pady=10)
 
     message_input = tk.Text(
@@ -107,7 +119,6 @@ def open_chat(firstname, lastname, email):
         fg=style.BLACK,
         relief="flat"
     )
-    
     message_input.pack(
         side="left",
         fill="x",
@@ -117,29 +128,36 @@ def open_chat(firstname, lastname, email):
     )
 
     def send_message():
-        message = message_input.get("1.0", "end-1c").strip()
+        message = message_input.get(
+            "1.0", "end-1c"
+        ).strip()
 
         if not message:
             return
 
         conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        
-        c.execute("""
-            INSERT INTO messages (sender, receiver, message)
-            VALUES(?, ?, ?)
-        """, ("You", email, message))
-        
-        conn.commit()
-        conn.close()
-        
-        conversation.config(state="normal")
-        conversation.insert("end", f"You: {message}\n\n")
-        conversation.config(state="disabled")
 
+        try:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO messages
+                (sender, receiver, message)
+                VALUES (?, ?, ?)
+            """, ("You", email, message))
+            conn.commit()
+        finally:
+            conn.close()
+
+        conversation.config(state="normal")
+        conversation.insert(
+            "end",
+            f"You: {message}\n\n"
+        )
+        conversation.config(state="disabled")
         conversation.see("end")
+
         message_input.delete("1.0", "end")
-        
+
     tk.Button(
         bottom_frame,
         text="Send",
@@ -148,11 +166,13 @@ def open_chat(firstname, lastname, email):
         fg=style.BLACK,
         command=send_message
     ).pack(side="right", padx=8, pady=8)
-    
-    message_input.bind(
-        "<Return>",
-        lambda event: send_message()
-    )
+
+    def handle_enter(event):
+        send_message()
+        return "break"
+
+    message_input.bind("<Return>", handle_enter)
+    message_input.focus_set()
     
 def open_screen(screen_title):
     screen = tk.Toplevel()
@@ -227,42 +247,98 @@ def home_page():
     )
     main_frame.pack(fill="both", expand=True, pady=4)
 
+    # Right side conversation area
+    content_frame = tk.Frame(
+        main_frame,
+        bg=style.BG
+    )
+
+    content_frame.pack(
+        side="right",
+        fill="both",
+        expand=True
+    )
+
+    tk.Label(
+        content_frame,
+        text="Select a user to start a conversation",
+        font=("Segoe UI", 12),
+        bg=style.BG,
+        fg=style.WHITE
+    ).pack(expand=True)
+
     menu_frame = tk.Frame(main_frame, bg=style.CARD, width=220)
     menu_frame.pack(side="left", fill="y")
     menu_frame.pack_propagate(False)
-
-    conn = sqlite3.connect("lan_connect_project.db")
-    c = conn.cursor()
-    c.execute("SELECT firstname, lastname, email FROM register")
-    users = c.fetchall()
-    conn.close()
-
+    
     tk.Label(
         menu_frame,
-        text="Registered Users",
+        text="Online Users",
         font=("Segoe UI", 10, "bold"),
         bg=style.CARD,
         fg=style.WHITE,
-        anchor="w",
-    ).pack(anchor="w", padx=10, pady=8)
+        anchor="w"
+    ).pack(fill="x", padx=10, pady=8)
+    
+    online_users_frame = tk.Frame(
+        menu_frame,
+        bg=style.CARD
+    )
+    online_users_frame.pack(fill="both", expand=True)
+    
+    def update_online_users(users):
+        def refresh_list():
+            for widget in online_users_frame.winfo_children():
+                widget.destroy()
+                
+            if not users:
+                tk.Label(
+                    online_users_frame,
+                    text="No users online",
+                    bg=style.CARD,
+                    fg="#9CA3AF"
+                ).pack(anchor="w", padx=10, pady=5)
+                return
 
-    for firstname, lastname, email in users:
-        user_label = tk.Label(
-            menu_frame,
-            text=f"💬  {firstname} {lastname}",
-            font=("Segoe UI", 10),
-            bg=style.CARD,
-            fg=style.WHITE,
-            anchor="w",
-            cursor="hand2",
+            for user in users:
+                username = user["username"]
+                
+                user_row = tk.Frame(
+                    online_users_frame,
+                    bg=style.CARD
+                )
+                user_row.pack(fill="x", padx=10, pady=5)
+                
+                tk.Label(
+                    user_row,
+                    text="●",
+                    fg="#22C55E",
+                    bg=style.CARD
+                ).pack(side="left", padx=(0, 7))
+                
+                tk.Label(
+                    user_row,
+                    text=username,
+                    font=("Segoe UI", 10),
+                    bg=style.CARD,
+                    fg=style.WHITE,
+                    cursor="hand2",
+                    anchor="w"
+                ).pack(side="left", fill="x", expand=True)
+                
+            win.after(0, refresh_list)
+            
+        discovery = LANDiscovery(
+            username="Computer User",
+            on_update=update_online_users
         )
-
-        user_label.pack(fill="x", padx=10, pady=4)
-
-        user_label.bind(
-            "<Button-1>",
-            lambda event, fn=firstname, ln=lastname, em=email: 
-                open_chat(fn, ln, em),
-        )
+        
+        discovery.start()
+        
+        win.protocol("WM_DELETE_WINDOW", lambda: close_home())
+        
+        def close_home():
+            discovery.stop()
+            win.destroy()
 
     win.mainloop()
