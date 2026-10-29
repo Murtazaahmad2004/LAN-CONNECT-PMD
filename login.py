@@ -101,7 +101,7 @@ def check():
             )
 
             win.destroy()
-            home.home_page()
+            home.home_page(email)
 
         else:
             messagebox.showerror(
