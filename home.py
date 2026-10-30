@@ -2,20 +2,39 @@ import atexit
 import sqlite3
 import time
 import tkinter as tk
-from tkinter import *
 from tkinter import ttk
+
 from discovery import LANDiscovery
 import style
 import settings
 
-# import received_files
-# import message_history
-# import help_screen
-# import about
+import pystray
+from PIL import Image, ImageDraw
 
 
-def open_settings():
-    open_screen("Settings")
+def create_tray_image():
+    img = Image.new("RGB", (64, 64), "#2563eb")
+    d = ImageDraw.Draw(img)
+    d.ellipse((16, 16, 48, 48), fill="white")
+    return img
+
+
+DB_NAME = "lan_connect_project.db"
+
+
+def open_screen(screen_title):
+    screen = tk.Toplevel()
+    screen.title(screen_title)
+    screen.geometry("700x450")
+    screen.configure(bg=style.BG)
+
+    title = tk.Label(
+        screen, text=screen_title, font=style.TITLE_FONT, bg=style.BG, fg=style.WHITE
+    )
+    title.pack(pady=30)
+
+    back_btn = style.make_button(screen, "Close", screen.destroy, kind="primary")
+    back_btn.pack(pady=10)
 
 
 def open_received_files():
@@ -34,12 +53,8 @@ def open_about():
     open_screen("About")
 
 
-DB_NAME = "lan_connect_project.db"
-
-
 def create_chat_table():
     conn = sqlite3.connect(DB_NAME)
-
     try:
         c = conn.cursor()
         c.execute("""
@@ -49,7 +64,7 @@ def create_chat_table():
                 receiver TEXT NOT NULL,
                 message TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )          
+            )
         """)
         conn.commit()
     finally:
@@ -57,12 +72,9 @@ def create_chat_table():
 
 
 def open_chat(parent, firstname, lastname, email):
-
-    # Right side
     for widget in parent.winfo_children():
         widget.destroy()
 
-    # Chat header
     header = tk.Frame(parent, bg=style.CARD)
     header.pack(fill="x")
 
@@ -74,7 +86,6 @@ def open_chat(parent, firstname, lastname, email):
         fg=style.WHITE,
     ).pack(side="left", padx=15, pady=15)
 
-    # Messages display area
     conversation = tk.Text(
         parent,
         bg=style.BG,
@@ -87,33 +98,29 @@ def open_chat(parent, firstname, lastname, email):
     )
     conversation.pack(fill="both", expand=True, padx=10, pady=10)
 
-    # Load the saved conversation of the selected user
     conn = sqlite3.connect(DB_NAME)
-
     try:
         c = conn.cursor()
         c.execute(
             """
             SELECT sender, message
             FROM messages
-            WHERE receiver = ?
+            WHERE (sender = 'You' AND receiver = ?)
+               OR (sender = ? AND receiver = 'You')
             ORDER BY id ASC
-        """,
-            (email,),
+            """,
+            (email, email),
         )
         messages = c.fetchall()
     finally:
         conn.close()
 
     conversation.config(state="normal")
-
     for sender, message in messages:
         conversation.insert("end", f"{sender}: {message}\n\n")
-
     conversation.config(state="disabled")
     conversation.see("end")
 
-    # Bottom input area
     bottom_frame = tk.Frame(parent, bg=style.CARD)
     bottom_frame.pack(fill="x", padx=10, pady=10)
 
@@ -131,20 +138,17 @@ def open_chat(parent, firstname, lastname, email):
 
     def send_message():
         message = message_input.get("1.0", "end-1c").strip()
-
         if not message:
             return
 
         conn = sqlite3.connect(DB_NAME)
-
         try:
             c = conn.cursor()
             c.execute(
                 """
-                INSERT INTO messages
-                (sender, receiver, message)
+                INSERT INTO messages (sender, receiver, message)
                 VALUES (?, ?, ?)
-            """,
+                """,
                 ("You", email, message),
             )
             conn.commit()
@@ -158,9 +162,9 @@ def open_chat(parent, firstname, lastname, email):
 
         message_input.delete("1.0", "end")
 
-    style.make_button(
-        bottom_frame, "Send", send_message, kind="primary"
-    ).pack(side="right", padx=8, pady=8)
+    style.make_button(bottom_frame, "Send", send_message, kind="primary").pack(
+        side="right", padx=8, pady=8
+    )
 
     def handle_enter(event):
         send_message()
@@ -170,40 +174,23 @@ def open_chat(parent, firstname, lastname, email):
     message_input.focus_set()
 
 
-def open_screen(screen_title):
-    screen = tk.Toplevel()
-    screen.title(screen_title)
-    screen.geometry("700x450")
-    screen.configure(bg=style.BG)
-
-    title = tk.Label(
-        screen, text=screen_title, font=style.TITLE_FONT, bg=style.BG, fg=style.WHITE
-    )
-    title.pack(pady=30)
-
-    back_btn = style.make_button(
-        screen, "Close", screen.destroy, kind="primary"
-    )
-    back_btn.pack(pady=10)
-
-
 def home_page(user_email):
 
-    # Load logged-in user's saved settings
+    status_after_id = None
+    theme_after_id = None
+    tray_icon = None
+
     user_settings = settings.load_settings(user_email)
 
-    # Saved theme: "Auto" (follow OS), "Light" or "Dark"
     state = {
         "theme_mode": user_settings.get("theme", "Auto"),
         "inactive_on_minimize": bool(user_settings.get("inactive_on_minimize", 1)),
         "inactive_minutes": int(user_settings.get("inactive_minutes", 5) or 5),
     }
 
-    # Apply theme + remember it so the login screen matches next time
     style.set_theme(state["theme_mode"])
     style.save_preference(state["theme_mode"])
 
-    # Create main window
     win = tk.Tk()
     win.title("Home")
     create_chat_table()
@@ -211,7 +198,6 @@ def home_page(user_email):
     win.configure(bg=style.BG)
     style.setup_ttk(win)
 
-    # Fetch the logged-in user's name from the database.
     conn = sqlite3.connect(DB_NAME)
     try:
         cursor = conn.cursor()
@@ -221,99 +207,24 @@ def home_page(user_email):
             FROM register
             WHERE email = ?
             """,
-            (user_email,)
+            (user_email,),
         )
         logged_in_user = cursor.fetchone()
     finally:
         conn.close()
 
     if logged_in_user:
-        local_username = " ".join(
-            part for part in logged_in_user if part
-        ).strip()
+        local_username = " ".join(part for part in logged_in_user if part).strip()
     else:
         local_username = user_email or "Unknown User"
 
-    # Top Header
     header = tk.Frame(win, bg=style.CARD)
     header.pack(fill="x")
     header.pack_propagate(False)
 
-    # Top Navigation Menu
     top_menu_frame = tk.Frame(win, bg=style.CARD)
     top_menu_frame.pack(fill="x")
 
-    def open_settings_window():
-        settings.open_settings(
-            user_email=user_email,
-            main_window=win,
-            discovery=discovery,
-            on_save=lambda new: state.update(
-                theme_mode=new["theme"],
-                inactive_on_minimize=bool(new["inactive_on_minimize"]),
-                inactive_minutes=int(new["inactive_minutes"]),
-            ),
-        )
-
-    def toggle_theme():
-        new_mode = "Dark" if style.CURRENT_THEME == "Light" else "Light"
-
-        # Remember the choice for this user
-        try:
-            saved = settings.load_settings(user_email)
-            saved["theme"] = new_mode
-            settings.save_settings(user_email, saved)
-        except Exception:
-            pass
-
-        state["theme_mode"] = new_mode
-        style.apply_theme(win, new_mode)
-        style.save_preference(new_mode)
-
-    menu_items = [
-        ("⚙", "Settings", open_settings_window),
-        ("📥", "Received Files", open_received_files),
-        ("💬", "Message History", open_message_history),
-        ("❓", "Help", open_help),
-        ("ⓘ", "About", open_about),
-    ]
-
-    for icon_text, item_title, screen_function in menu_items:
-        btn = tk.Button(
-            top_menu_frame,
-            text=f"{icon_text}  {item_title}",
-            font=("Segoe UI", 10, "bold"),
-            bg=style.CARD,
-            fg=style.WHITE,
-            activebackground=style.CARD,
-            activeforeground=style.ACCENT,
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            padx=12,
-            pady=14,
-            command=screen_function,
-        )
-        btn.pack(side="left", padx=5, pady=3)
-
-    # Quick Light/Dark switch on the right side of the menu
-    tk.Button(
-        top_menu_frame,
-        text="🌓  Theme",
-        font=("Segoe UI", 10, "bold"),
-        bg=style.CARD,
-        fg=style.WHITE,
-        activebackground=style.CARD,
-        activeforeground=style.ACCENT,
-        relief="flat",
-        bd=0,
-        cursor="hand2",
-        padx=12,
-        pady=14,
-        command=toggle_theme,
-    ).pack(side="right", padx=5, pady=3)
-
-    # Main content layout
     main_frame = tk.Frame(win, bg=style.BG)
     main_frame.pack(fill="both", expand=True, pady=4)
 
@@ -328,7 +239,6 @@ def home_page(user_email):
         fg=style.MUTED,
     ).pack(expand=True)
 
-    # Left users panel
     users_frame = tk.Frame(main_frame, bg=style.CARD, width=220)
     users_frame.pack(side="left", fill="y")
     users_frame.pack_propagate(False)
@@ -345,21 +255,40 @@ def home_page(user_email):
     online_users_frame = tk.Frame(users_frame, bg=style.CARD)
     online_users_frame.pack(fill="both", expand=True)
 
-    # Minimized time before "Inactive" is chosen by the user in Settings
-    INACTIVE_TIMEOUT = 10 * 60    # no activity for 10 minutes -> Inactive
+    INACTIVE_TIMEOUT = 10 * 60
     STATUS_COLORS = {
         "Online": style.STATUS_ONLINE,
         "Inactive": style.STATUS_INACTIVE,
         "Offline": style.STATUS_OFFLINE,
     }
 
-    # Users are keyed by username (one entry per person). Offline users stay
-    # in the list while the app is running on any computer; the list is
-    # shared between computers and is empty again once every app is closed.
     known_users = {}
-
     last_activity = time.monotonic()
     minimized_since = None
+
+    def open_user_chat(username):
+        parts = username.split(" ", 1)
+        firstname = parts[0]
+        lastname = parts[1] if len(parts) > 1 else ""
+
+        email = username
+        conn = sqlite3.connect(DB_NAME)
+        try:
+            c = conn.cursor()
+            c.execute(
+                """
+                SELECT email FROM register
+                WHERE TRIM(firstname || ' ' || lastname) = ?
+                """,
+                (username,),
+            )
+            result = c.fetchone()
+            if result:
+                email = result[0]
+        finally:
+            conn.close()
+
+        open_chat(content_frame, firstname, lastname, email)
 
     def render_users():
         for widget in online_users_frame.winfo_children():
@@ -407,29 +336,42 @@ def home_page(user_email):
             )
             name_label.pack(side="left", fill="x", expand=True)
 
+            username = user["username"]
+            for widget in (row, name_label):
+                widget.bind(
+                    "<Button-1>",
+                    lambda e, name=username: open_user_chat(name),
+                )
 
     def update_online_users(users):
         for user in users:
             name = user["username"]
             current = known_users.get(name)
 
-            # A restarted app gets a new instance id; keep the newest entry
             if current and current.get("last_seen", 0) > user.get("last_seen", 0):
                 continue
 
             known_users[name] = user
 
-        # Share the Offline users with the other computers, so a computer
-        # that starts later also shows them.
         discovery.set_roster(
-            [
-                u["username"]
-                for u in known_users.values()
-                if u.get("status") == "Offline"
-            ]
+            [u["username"] for u in known_users.values() if u.get("status") == "Offline"]
         )
 
         render_users()
+
+    def safe_update_users(users):
+        try:
+            if win.winfo_exists():
+                win.after(
+                    0,
+                    lambda current_users=users: (
+                        update_online_users(current_users)
+                        if win.winfo_exists()
+                        else None
+                    ),
+                )
+        except tk.TclError:
+            pass
 
     def mark_activity(event=None):
         nonlocal last_activity
@@ -438,9 +380,12 @@ def home_page(user_email):
             discovery.set_status("Online")
 
     def check_status():
-        nonlocal minimized_since
+        nonlocal minimized_since, status_after_id
 
-        if not win.winfo_exists():
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
             return
 
         now = time.monotonic()
@@ -449,7 +394,7 @@ def home_page(user_email):
         if is_minimized:
             if minimized_since is None:
                 minimized_since = now
-            # Only when the option is enabled; time = minutes set by the user
+
             if (
                 state["inactive_on_minimize"]
                 and now - minimized_since >= state["inactive_minutes"] * 60
@@ -457,45 +402,184 @@ def home_page(user_email):
                 discovery.set_status("Inactive")
         else:
             minimized_since = None
+
             if now - last_activity >= INACTIVE_TIMEOUT:
                 discovery.set_status("Inactive")
             else:
                 discovery.set_status("Online")
 
-        win.after(1000, check_status)
+        status_after_id = win.after(1000, check_status)
 
     def follow_system_theme():
-        """In 'Auto' mode, switch when the OS goes Light <-> Dark."""
-        if not win.winfo_exists():
+        nonlocal theme_after_id
+
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
             return
 
         if state["theme_mode"] == "Auto":
             if style.resolve_theme("Auto") != style.CURRENT_THEME:
                 style.apply_theme(win, "Auto")
 
-        win.after(10000, follow_system_theme)
+        theme_after_id = win.after(10000, follow_system_theme)
 
     discovery = LANDiscovery(
         username=local_username,
-        on_update=lambda users: win.after(
-            0,
-            lambda current_users=users: update_online_users(current_users)
-        ),
+        on_update=safe_update_users,
     )
+
+    def open_settings_window():
+        settings.open_settings(
+            user_email=user_email,
+            main_window=win,
+            discovery=discovery,
+            on_save=lambda new: state.update(
+                theme_mode=new["theme"],
+                inactive_on_minimize=bool(new["inactive_on_minimize"]),
+                inactive_minutes=int(new["inactive_minutes"]),
+            ),
+        )
+
+    def toggle_theme():
+        new_mode = "Dark" if style.CURRENT_THEME == "Light" else "Light"
+
+        try:
+            saved = settings.load_settings(user_email)
+            saved["theme"] = new_mode
+            settings.save_settings(user_email, saved)
+        except Exception:
+            pass
+
+        state["theme_mode"] = new_mode
+        style.apply_theme(win, new_mode)
+        style.save_preference(new_mode)
+
+    def stop_tray():
+        nonlocal tray_icon
+        if tray_icon is not None:
+            try:
+                tray_icon.stop()
+            except Exception:
+                pass
+            tray_icon = None
+
+    def shutdown():
+        nonlocal status_after_id, theme_after_id
+
+        for after_id in (status_after_id, theme_after_id):
+            if after_id is not None:
+                try:
+                    win.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+        status_after_id = None
+        theme_after_id = None
+
+        try:
+            win.unbind_all("<KeyPress>")
+            win.unbind_all("<Button>")
+            win.unbind_all("<Motion>")
+        except tk.TclError:
+            pass
+
+        stop_tray()
+
+        try:
+            discovery.stop()
+        except Exception:
+            pass
+
+    def restore_window():
+        stop_tray()
+        win.deiconify()
+        win.lift()
+        win.focus_force()
+
+    def exit_app():
+        shutdown()
+        win.destroy()
+
+    def hide_to_tray():
+        nonlocal tray_icon
+        win.withdraw()
+
+        if tray_icon is None:
+            menu = pystray.Menu(
+                pystray.MenuItem(
+                    "Open LAN Connect",
+                    lambda icon, item: win.after(0, restore_window),
+                    default=True,
+                ),
+                pystray.MenuItem(
+                    "Exit",
+                    lambda icon, item: win.after(0, exit_app),
+                ),
+            )
+            tray_icon = pystray.Icon(
+                "LANConnect", create_tray_image(), "LAN Connect", menu
+            )
+            tray_icon.run_detached()
+
+    def open_logout():
+        shutdown()
+        win.destroy()
+
+        from login import show_login
+        show_login()
+
+    menu_items = [
+        ("⚙", "Settings", open_settings_window),
+        ("📥", "Received Files", open_received_files),
+        ("💬", "Message History", open_message_history),
+        ("❓", "Help", open_help),
+        ("ⓘ", "About", open_about),
+        ("⇥", "Logout", open_logout),
+    ]
+
+    for icon_text, item_title, screen_function in menu_items:
+        tk.Button(
+            top_menu_frame,
+            text=f"{icon_text}  {item_title}",
+            font=("Segoe UI", 10, "bold"),
+            bg=style.CARD,
+            fg=style.WHITE,
+            activebackground=style.CARD,
+            activeforeground=style.ACCENT,
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=12,
+            pady=14,
+            command=screen_function,
+        ).pack(side="left", padx=5, pady=3)
+
+    tk.Button(
+        top_menu_frame,
+        text="🌓  Theme",
+        font=("Segoe UI", 10, "bold"),
+        bg=style.CARD,
+        fg=style.WHITE,
+        activebackground=style.CARD,
+        activeforeground=style.ACCENT,
+        relief="flat",
+        bd=0,
+        cursor="hand2",
+        padx=12,
+        pady=14,
+        command=toggle_theme,
+    ).pack(side="right", padx=5, pady=3)
 
     win.bind_all("<KeyPress>", mark_activity)
     win.bind_all("<Button>", mark_activity)
     win.bind_all("<Motion>", mark_activity)
 
-    def close_home():
-        discovery.stop()
-        win.destroy()
+    win.protocol("WM_DELETE_WINDOW", hide_to_tray)
 
-    win.protocol("WM_DELETE_WINDOW", close_home)
     discovery.start()
-    # Also announce "Offline" if the program ends without closing the window
     atexit.register(discovery.stop)
-    win.after(1000, check_status)
-    win.after(10000, follow_system_theme)
+    status_after_id = win.after(1000, check_status)
+    theme_after_id = win.after(10000, follow_system_theme)
     render_users()
     win.mainloop()

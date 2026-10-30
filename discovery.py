@@ -13,7 +13,6 @@ ROSTER_LIMIT = 30
 
 INSTANCE_ID = str(uuid.uuid4())
 
-
 def get_local_ip():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -24,7 +23,6 @@ def get_local_ip():
         return "127.0.0.1"
     finally:
         sock.close()
-
 
 class LANDiscovery:
     def __init__(self, username, on_update=None):
@@ -40,8 +38,6 @@ class LANDiscovery:
         self.socket = None
         self._last_timeout_check = 0
 
-        # Names of Offline users this computer knows about. They are sent
-        # with every packet so computers that start later learn them too.
         self.roster = []
 
     def set_roster(self, names):
