@@ -1,4 +1,3 @@
-
 import socket
 import json
 import threading
@@ -10,6 +9,7 @@ CHAT_PORT = 37021
 
 BROADCAST_INTERVAL = 3
 USER_TIMEOUT = 10
+ROSTER_LIMIT = 30
 
 INSTANCE_ID = str(uuid.uuid4())
 
@@ -38,6 +38,17 @@ class LANDiscovery:
         self.users = {}
         self.lock = threading.Lock()
         self.socket = None
+        self._last_timeout_check = 0
+
+        # Names of Offline users this computer knows about. They are sent
+        # with every packet so computers that start later learn them too.
+        self.roster = []
+
+    def set_roster(self, names):
+        self.roster = [
+            name for name in names
+            if isinstance(name, str) and 0 < len(name) <= 60
+        ][:ROSTER_LIMIT]
 
     def start(self):
         if self.running:
@@ -62,13 +73,20 @@ class LANDiscovery:
         if self.status != status:
             self.status = status
 
+            # Tell the other computers immediately, not at the next heartbeat
+            if self.running:
+                self._broadcast_once()
+
     def stop(self):
         if not self.running:
             return
 
-        # Baqi computers ko Offline status bhejein.
+        # Tell the other computers we are Offline. UDP can drop packets,
+        # so send it a few times.
         self.status = "Offline"
-        self._broadcast_once()
+        for _ in range(3):
+            self._broadcast_once()
+            time.sleep(0.1)
 
         self.running = False
 
@@ -84,7 +102,8 @@ class LANDiscovery:
             "instance_id": INSTANCE_ID,
             "username": self.username,
             "port": CHAT_PORT,
-            "status": self.status
+            "status": self.status,
+            "roster": self.roster
         }
 
     def _broadcast_once(self):
@@ -155,6 +174,13 @@ class LANDiscovery:
             sock.settimeout(1)
 
             while self.running:
+                # Check for silent computers (crashed / unplugged) every
+                # second, even when other computers keep sending packets.
+                now_check = time.time()
+                if now_check - self._last_timeout_check >= 1:
+                    self._last_timeout_check = now_check
+                    self._check_timeouts()
+
                 try:
                     data, address = sock.recvfrom(4096)
                 except socket.timeout:
@@ -209,6 +235,43 @@ class LANDiscovery:
                                 "last_seen": now,
                                 "status": status
                             }
+
+                            # The real entry replaces the shared placeholder
+                            self.users.pop("roster:" + username, None)
+
+                            # Same person restarted: drop the old Offline entry
+                            for old_id in [
+                                key for key, old in self.users.items()
+                                if old["username"] == username
+                                and key != instance_id
+                                and old["status"] == "Offline"
+                            ]:
+                                del self.users[old_id]
+
+                        # Learn Offline users that other computers know
+                        roster = packet.get("roster", [])
+
+                        if isinstance(roster, list):
+                            known_names = {
+                                u["username"] for u in self.users.values()
+                            }
+                            known_names.add(self.username)
+
+                            for name in roster[:ROSTER_LIMIT]:
+                                if (
+                                    isinstance(name, str)
+                                    and 0 < len(name) <= 60
+                                    and name not in known_names
+                                ):
+                                    known_names.add(name)
+                                    self.users["roster:" + name] = {
+                                        "instance_id": "roster:" + name,
+                                        "username": name,
+                                        "ip": "",
+                                        "port": CHAT_PORT,
+                                        "last_seen": 0,
+                                        "status": "Offline"
+                                    }
 
                     self._notify_update()
 

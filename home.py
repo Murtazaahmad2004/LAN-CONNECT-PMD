@@ -1,3 +1,4 @@
+import atexit
 import sqlite3
 import time
 import tkinter as tk
@@ -82,10 +83,11 @@ def open_chat(parent, firstname, lastname, email):
         wrap="word",
         state="disabled",
         relief="flat",
+        insertbackground=style.BLACK,
     )
     conversation.pack(fill="both", expand=True, padx=10, pady=10)
 
-    # Selected user ki saved conversation load karna
+    # Load the saved conversation of the selected user
     conn = sqlite3.connect(DB_NAME)
 
     try:
@@ -122,6 +124,7 @@ def open_chat(parent, firstname, lastname, email):
         wrap="word",
         bg=style.INPUT_BG,
         fg=style.BLACK,
+        insertbackground=style.BLACK,
         relief="flat",
     )
     message_input.pack(side="left", fill="x", expand=True, padx=8, pady=8)
@@ -155,13 +158,8 @@ def open_chat(parent, firstname, lastname, email):
 
         message_input.delete("1.0", "end")
 
-    tk.Button(
-        bottom_frame,
-        text="Send",
-        font=style.BUTTON_FONT,
-        bg=style.ACCENT,
-        fg=style.BLACK,
-        command=send_message,
+    style.make_button(
+        bottom_frame, "Send", send_message, kind="primary"
     ).pack(side="right", padx=8, pady=8)
 
     def handle_enter(event):
@@ -183,29 +181,37 @@ def open_screen(screen_title):
     )
     title.pack(pady=30)
 
-    back_btn = tk.Button(
-        screen,
-        text="Close",
-        font=style.BUTTON_FONT,
-        bg=style.ACCENT,
-        fg=style.BLACK,
-        command=screen.destroy,
+    back_btn = style.make_button(
+        screen, "Close", screen.destroy, kind="primary"
     )
     back_btn.pack(pady=10)
 
 
 def home_page(user_email):
-    """
-    user_email: login karne wale user ka email.
-    Login success par home_page(user_email) call karein.
-    """
+
+    # Load logged-in user's saved settings
+    user_settings = settings.load_settings(user_email)
+
+    # Saved theme: "Auto" (follow OS), "Light" or "Dark"
+    state = {
+        "theme_mode": user_settings.get("theme", "Auto"),
+        "inactive_on_minimize": bool(user_settings.get("inactive_on_minimize", 1)),
+        "inactive_minutes": int(user_settings.get("inactive_minutes", 5) or 5),
+    }
+
+    # Apply theme + remember it so the login screen matches next time
+    style.set_theme(state["theme_mode"])
+    style.save_preference(state["theme_mode"])
+
+    # Create main window
     win = tk.Tk()
     win.title("Home")
     create_chat_table()
     win.geometry(style.WINDOW_SIZE)
     win.configure(bg=style.BG)
+    style.setup_ttk(win)
 
-    # Logged-in user ka naam database se fetch karein.
+    # Fetch the logged-in user's name from the database.
     conn = sqlite3.connect(DB_NAME)
     try:
         cursor = conn.cursor()
@@ -237,8 +243,35 @@ def home_page(user_email):
     top_menu_frame = tk.Frame(win, bg=style.CARD)
     top_menu_frame.pack(fill="x")
 
+    def open_settings_window():
+        settings.open_settings(
+            user_email=user_email,
+            main_window=win,
+            discovery=discovery,
+            on_save=lambda new: state.update(
+                theme_mode=new["theme"],
+                inactive_on_minimize=bool(new["inactive_on_minimize"]),
+                inactive_minutes=int(new["inactive_minutes"]),
+            ),
+        )
+
+    def toggle_theme():
+        new_mode = "Dark" if style.CURRENT_THEME == "Light" else "Light"
+
+        # Remember the choice for this user
+        try:
+            saved = settings.load_settings(user_email)
+            saved["theme"] = new_mode
+            settings.save_settings(user_email, saved)
+        except Exception:
+            pass
+
+        state["theme_mode"] = new_mode
+        style.apply_theme(win, new_mode)
+        style.save_preference(new_mode)
+
     menu_items = [
-        ("⚙", "Settings", settings.open_settings),
+        ("⚙", "Settings", open_settings_window),
         ("📥", "Received Files", open_received_files),
         ("💬", "Message History", open_message_history),
         ("❓", "Help", open_help),
@@ -249,18 +282,36 @@ def home_page(user_email):
         btn = tk.Button(
             top_menu_frame,
             text=f"{icon_text}  {item_title}",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 10, "bold"),
             bg=style.CARD,
             fg=style.WHITE,
-            activebackground=style.BORDER,
+            activebackground=style.CARD,
             activeforeground=style.ACCENT,
             relief="flat",
+            bd=0,
             cursor="hand2",
             padx=12,
             pady=14,
             command=screen_function,
         )
         btn.pack(side="left", padx=5, pady=3)
+
+    # Quick Light/Dark switch on the right side of the menu
+    tk.Button(
+        top_menu_frame,
+        text="🌓  Theme",
+        font=("Segoe UI", 10, "bold"),
+        bg=style.CARD,
+        fg=style.WHITE,
+        activebackground=style.CARD,
+        activeforeground=style.ACCENT,
+        relief="flat",
+        bd=0,
+        cursor="hand2",
+        padx=12,
+        pady=14,
+        command=toggle_theme,
+    ).pack(side="right", padx=5, pady=3)
 
     # Main content layout
     main_frame = tk.Frame(win, bg=style.BG)
@@ -274,7 +325,7 @@ def home_page(user_email):
         text="Select a user to start a conversation",
         font=("Segoe UI", 12),
         bg=style.BG,
-        fg=style.WHITE,
+        fg=style.MUTED,
     ).pack(expand=True)
 
     # Left users panel
@@ -294,14 +345,19 @@ def home_page(user_email):
     online_users_frame = tk.Frame(users_frame, bg=style.CARD)
     online_users_frame.pack(fill="both", expand=True)
 
-    INACTIVE_TIMEOUT = 10 * 60
+    # Minimized time before "Inactive" is chosen by the user in Settings
+    INACTIVE_TIMEOUT = 10 * 60    # no activity for 10 minutes -> Inactive
     STATUS_COLORS = {
-        "Online": "#22C55E",
-        "Inactive": "#F59E0B",
-        "Offline": "#9CA3AF",
+        "Online": style.STATUS_ONLINE,
+        "Inactive": style.STATUS_INACTIVE,
+        "Offline": style.STATUS_OFFLINE,
     }
 
+    # Users are keyed by username (one entry per person). Offline users stay
+    # in the list while the app is running on any computer; the list is
+    # shared between computers and is empty again once every app is closed.
     known_users = {}
+
     last_activity = time.monotonic()
     minimized_since = None
 
@@ -314,11 +370,20 @@ def home_page(user_email):
                 online_users_frame,
                 text="No users discovered",
                 bg=style.CARD,
-                fg="#9CA3AF",
+                fg=style.MUTED,
             ).pack(anchor="w", padx=10, pady=5)
             return
 
-        for user_id, user in known_users.items():
+        status_order = {"Online": 0, "Inactive": 1, "Offline": 2}
+        sorted_users = sorted(
+            known_users.values(),
+            key=lambda u: (
+                status_order.get(u.get("status", "Offline"), 2),
+                u["username"].lower(),
+            ),
+        )
+
+        for user in sorted_users:
             status = user.get("status", "Offline")
             row = tk.Frame(online_users_frame, bg=style.CARD)
             row.pack(fill="x", padx=10, pady=5)
@@ -345,8 +410,25 @@ def home_page(user_email):
 
     def update_online_users(users):
         for user in users:
-            user_id = user["instance_id"]
-            known_users[user_id] = user
+            name = user["username"]
+            current = known_users.get(name)
+
+            # A restarted app gets a new instance id; keep the newest entry
+            if current and current.get("last_seen", 0) > user.get("last_seen", 0):
+                continue
+
+            known_users[name] = user
+
+        # Share the Offline users with the other computers, so a computer
+        # that starts later also shows them.
+        discovery.set_roster(
+            [
+                u["username"]
+                for u in known_users.values()
+                if u.get("status") == "Offline"
+            ]
+        )
+
         render_users()
 
     def mark_activity(event=None):
@@ -367,7 +449,11 @@ def home_page(user_email):
         if is_minimized:
             if minimized_since is None:
                 minimized_since = now
-            if now - minimized_since >= INACTIVE_TIMEOUT:
+            # Only when the option is enabled; time = minutes set by the user
+            if (
+                state["inactive_on_minimize"]
+                and now - minimized_since >= state["inactive_minutes"] * 60
+            ):
                 discovery.set_status("Inactive")
         else:
             minimized_since = None
@@ -377,6 +463,17 @@ def home_page(user_email):
                 discovery.set_status("Online")
 
         win.after(1000, check_status)
+
+    def follow_system_theme():
+        """In 'Auto' mode, switch when the OS goes Light <-> Dark."""
+        if not win.winfo_exists():
+            return
+
+        if state["theme_mode"] == "Auto":
+            if style.resolve_theme("Auto") != style.CURRENT_THEME:
+                style.apply_theme(win, "Auto")
+
+        win.after(10000, follow_system_theme)
 
     discovery = LANDiscovery(
         username=local_username,
@@ -396,5 +493,9 @@ def home_page(user_email):
 
     win.protocol("WM_DELETE_WINDOW", close_home)
     discovery.start()
+    # Also announce "Offline" if the program ends without closing the window
+    atexit.register(discovery.stop)
     win.after(1000, check_status)
+    win.after(10000, follow_system_theme)
+    render_users()
     win.mainloop()

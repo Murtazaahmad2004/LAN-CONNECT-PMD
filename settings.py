@@ -1,334 +1,233 @@
+import sqlite3
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
 import style
-import time
 
+DB_NAME = Path(__file__).resolve().parent / "lan_connect_project.db"
 
-def open_settings():
-    screen = tk.Toplevel()
-    screen.title("Settings")
-    screen.geometry("850x500")
-    screen.configure(bg=style.BG)
+DEFAULTS = {
+    "away_on_screensaver": 1, "show_taskbar_when_minimized": 1,
+    "hide_my_username": 0, "hide_offline_users": 0, "hide_away_users": 0,
+    "legacy_view": 0, "theme": "Auto", "language": "English",
+    "display_name": "", "department": "", "listening_port": "5000",
+    "discover_peers": 1, "download_folder": "", "sound_enabled": 1,
+    "logging_enabled": 1, "enter_to_send": 1,
+    "inactive_on_minimize": 1, "inactive_minutes": 5
+}
 
-    # Main application window
-    main_window = screen.master
+def _db():
+    return sqlite3.connect(DB_NAME)
 
-    # Timer variables
-    minimized_since = None
-    away_timer_id = None
+def ensure_settings_table():
+    definitions = {
+        "away_on_screensaver": "INTEGER NOT NULL DEFAULT 1",
+        "show_taskbar_when_minimized": "INTEGER NOT NULL DEFAULT 1",
+        "hide_my_username": "INTEGER NOT NULL DEFAULT 0",
+        "hide_offline_users": "INTEGER NOT NULL DEFAULT 0",
+        "hide_away_users": "INTEGER NOT NULL DEFAULT 0",
+        "legacy_view": "INTEGER NOT NULL DEFAULT 0",
+        "theme": "TEXT NOT NULL DEFAULT 'Auto'",
+        "language": "TEXT NOT NULL DEFAULT 'English'",
+        "display_name": "TEXT DEFAULT ''",
+        "department": "TEXT DEFAULT ''",
+        "listening_port": "TEXT DEFAULT '5000'",
+        "discover_peers": "INTEGER NOT NULL DEFAULT 1",
+        "download_folder": "TEXT DEFAULT ''",
+        "sound_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "logging_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "enter_to_send": "INTEGER NOT NULL DEFAULT 1",
+        "inactive_on_minimize": "INTEGER NOT NULL DEFAULT 1",
+        "inactive_minutes": "INTEGER NOT NULL DEFAULT 5"
+    }
+    with _db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS app_settings
+            (user_email TEXT PRIMARY KEY)""")
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(app_settings)")}
+        for name, definition in definitions.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE app_settings ADD COLUMN {name} {definition}")
 
-    # Notebook / Tabs
-    notebook = ttk.Notebook(screen)
-    notebook.pack(fill="both", expand=True, padx=10, pady=10)
+def load_settings(user_email=""):
+    ensure_settings_table()
+    result = DEFAULTS.copy()
+    if user_email:
+        with _db() as conn:
+            row = conn.execute("SELECT * FROM app_settings WHERE user_email=?",
+                               (user_email,)).fetchone()
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(app_settings)")]
+        if row:
+            saved = dict(zip(cols, row))
+            result.update({k: saved[k] for k in DEFAULTS if k in saved})
+    return result
 
-    # Tab frames
-    sound_tab = tk.Frame(notebook, bg=style.BG)
-    network_tab = tk.Frame(notebook, bg=style.BG)
-    transfer_tab = tk.Frame(notebook, bg=style.BG)
-    logging_tab = tk.Frame(notebook, bg=style.BG)
-    hotkeys_tab = tk.Frame(notebook, bg=style.BG)
-    general_tab = tk.Frame(notebook, bg=style.BG)
-    user_tab = tk.Frame(notebook, bg=style.BG)
-    messaging_tab = tk.Frame(notebook, bg=style.BG)
-
-    # Tabs
-    notebook.add(general_tab, text="General")
-    notebook.add(user_tab, text="User Information")
-    notebook.add(messaging_tab, text="Messaging")
-    notebook.add(sound_tab, text="Sound Events")
-    notebook.add(network_tab, text="Network")
-    notebook.add(transfer_tab, text="File Transfer")
-    notebook.add(logging_tab, text="Logging")
-    notebook.add(hotkeys_tab, text="Hot Keys")
-
-    # Heading helper
-    def heading(parent, text):
-        tk.Label(
-            parent,
-            text=text,
-            font=style.TITLE_FONT,
-            bg=style.BG,
-            fg=style.WHITE
-        ).pack(anchor="w", padx=20, pady=(20, 15))
-
-    # General tab
-    heading(general_tab, "General Settings")
-
-    tk.Label(
-        general_tab,
-        text="User List",
-        bg=style.BG,
-        fg=style.WHITE,
-        font=("Segoe UI", 10, "bold")
-    ).pack(anchor="w", padx=25, pady=8)
-
-    tk.Frame(
-        general_tab,
-        bg=style.BORDER,
-        height=1
-    ).pack(fill="x", padx=25, pady=5)
-
-    choices = tk.BooleanVar(value=True)
-
-    tk.Checkbutton(
-        general_tab,
-        text='Change status to "Away" after being inactive',
-        variable=choices,
-        bg=style.BG,
-        fg=style.WHITE,
-        selectcolor=style.CARD,
-        activebackground=style.BG,
-        activeforeground=style.WHITE,
-        highlightthickness=0,
-        takefocus=0
-    ).pack(anchor="w", padx=28, pady=8)
-
-    tk.Label(
-        general_tab,
-        text="Inactive time (minutes)",
-        bg=style.BG,
-        fg=style.WHITE,
-        font=style.LABEL_FONT
-    ).pack(anchor="w", padx=28, pady=(8, 4))
-
-    away_minutes = tk.Entry(
-        general_tab,
-        bg=style.CARD,
-        fg=style.WHITE,
-        insertbackground=style.WHITE,
-        font=style.INPUT_FONT,
-        relief="flat",
-        highlightthickness=1,
-        highlightbackground=style.BORDER,
-        highlightcolor=style.ACCENT
-    )
-    away_minutes.insert(0, "5")
-    away_minutes.pack(fill="x", padx=28, pady=(0, 10))
-
-    # Current status
-    status_label = tk.Label(
-        general_tab,
-        text="Status: Online",
-        bg=style.BG,
-        fg=style.ACCENT,
-        font=style.LABEL_FONT
-    )
-    status_label.pack(anchor="w", padx=28, pady=8)
-
-    # Inactivity timer
-    def check_inactivity():
-        nonlocal minimized_since, away_timer_id
-
-        if not screen.winfo_exists():
-            return
-
-        try:
-            minutes = int(away_minutes.get().strip())
-        except ValueError:
-            status_label.config(text="Status: Enter valid minutes")
-            away_timer_id = screen.after(1000, check_inactivity)
-            return
-
-        if minutes <= 0:
-            status_label.config(text="Status: Enter valid minutes")
-            minimized_since = None
-
-        elif not choices.get():
-            status_label.config(text="Status: Online")
-            minimized_since = None
-
-        else:
-            try:
-                is_minimized = main_window.state() == "iconic"
-            except tk.TclError:
-                is_minimized = False
-
-            if is_minimized:
-                if minimized_since is None:
-                    minimized_since = time.time()
-
-                elapsed = time.time() - minimized_since
-
-                if elapsed >= minutes * 60:
-                    status_label.config(text="Status: Away")
-                else:
-                    status_label.config(text="Status: Online")
-            else:
-                minimized_since = None
-                status_label.config(text="Status: Online")
-
-        away_timer_id = screen.after(1000, check_inactivity)
-
-    check_inactivity()
-
-    # User Information tab
-    heading(user_tab, "User Information")
-
-    tk.Label(
-        user_tab,
-        text="Display Name",
-        bg=style.BG,
-        fg=style.LABEL
-    ).pack(anchor="w", padx=25)
-
-    display_name = tk.Entry(user_tab, font=style.INPUT_FONT)
-    display_name.pack(anchor="w", padx=25, pady=8)
-
-    tk.Label(
-        user_tab,
-        text="Department",
-        bg=style.BG,
-        fg=style.LABEL
-    ).pack(anchor="w", padx=25)
-
-    department = ttk.Combobox(
-        user_tab,
-        values=["CS", "EC", "Mechanical"],
-        state="readonly"
-    )
-    department.pack(anchor="w", padx=25, pady=8)
-
-    # Network tab
-    heading(network_tab, "Network Settings")
-
-    tk.Label(
-        network_tab,
-        text="Listening Port",
-        bg=style.BG,
-        fg=style.LABEL
-    ).pack(anchor="w", padx=25)
-
-    port_entry = tk.Entry(network_tab)
-    port_entry.insert(0, "5000")
-    port_entry.pack(anchor="w", padx=25, pady=8)
-
-    discover_peers = tk.BooleanVar(value=True)
-
-    tk.Checkbutton(
-        network_tab,
-        text="Enable peer discovery",
-        variable=discover_peers,
-        bg=style.BG,
-        fg=style.WHITE,
-        selectcolor=style.CARD
-    ).pack(anchor="w", padx=25, pady=8)
-
-    # File Transfer tab
-    heading(transfer_tab, "File Transfer Settings")
-
-    folder_var = tk.StringVar()
-
-    tk.Label(
-        transfer_tab,
-        text="Download Folder",
-        bg=style.BG,
-        fg=style.LABEL
-    ).pack(anchor="w", padx=25)
-
-    folder_frame = tk.Frame(transfer_tab, bg=style.BG)
-    folder_frame.pack(fill="x", padx=25, pady=8)
-
-    tk.Entry(
-        folder_frame,
-        textvariable=folder_var
-    ).pack(side="left", fill="x", expand=True)
-
-    def browse_folder():
-        folder = filedialog.askdirectory(parent=screen)
-        if folder:
-            folder_var.set(folder)
-
-    tk.Button(
-        folder_frame,
-        text="Browse",
-        command=browse_folder
-    ).pack(side="left", padx=5)
-
-    # Sound Events tab
-    heading(sound_tab, "Sound Events")
-
-    sound_enabled = tk.BooleanVar(value=True)
-
-    tk.Checkbutton(
-        sound_tab,
-        text="Enable sound events",
-        variable=sound_enabled,
-        bg=style.BG,
-        fg=style.WHITE,
-        selectcolor=style.CARD
-    ).pack(anchor="w", padx=25, pady=8)
-
-    # Logging tab
-    heading(logging_tab, "Logging Settings")
-
-    logging_enabled = tk.BooleanVar(value=True)
-
-    tk.Checkbutton(
-        logging_tab,
-        text="Enable application logging",
-        variable=logging_enabled,
-        bg=style.BG,
-        fg=style.WHITE,
-        selectcolor=style.CARD
-    ).pack(anchor="w", padx=25, pady=8)
-
-    # Hot Keys tab
-    heading(hotkeys_tab, "Keyboard Shortcuts")
-
-    tk.Label(
-        hotkeys_tab,
-        text="Open Settings: Ctrl + ,\n"
-             "Send Message: Enter\n"
-             "Close Window: Alt + F4",
-        justify="left",
-        bg=style.BG,
-        fg=style.LABEL,
-        font=style.INPUT_FONT
-    ).pack(anchor="w", padx=25)
-
-    # Messaging tab
-    heading(messaging_tab, "Messaging Settings")
-
-    enter_to_send = tk.BooleanVar(value=True)
-
-    tk.Checkbutton(
-        messaging_tab,
-        text="Press Enter to send messages",
-        variable=enter_to_send,
-        bg=style.BG,
-        fg=style.WHITE,
-        selectcolor=style.CARD
-    ).pack(anchor="w", padx=25, pady=8)
-
-    # Save button
-    def save_settings():
-        print(
-            "Settings values:",
-            display_name.get(),
-            department.get(),
-            port_entry.get(),
-            folder_var.get(),
-            "Away enabled:", choices.get(),
-            "Inactive minutes:", away_minutes.get()
+def save_settings(user_email, values):
+    if not user_email:
+        raise ValueError("Logged-in user's email is required.")
+    ensure_settings_table()
+    data = DEFAULTS.copy()
+    data.update(values)
+    cols = ["user_email"] + list(DEFAULTS)
+    with _db() as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO app_settings ({','.join(cols)}) "
+            f"VALUES ({','.join('?' for _ in cols)})",
+            [user_email] + [data[k] for k in DEFAULTS]
         )
 
-    tk.Button(
-        screen,
-        text="Save Settings",
-        font=style.BUTTON_FONT,
-        bg=style.ACCENT,
-        fg=style.BLACK,
-        command=save_settings
-    ).pack(pady=(0, 10))
+def open_settings(user_email="", main_window=None, discovery=None, on_save=None):
+    data = load_settings(user_email)
+    win = tk.Toplevel(main_window) if main_window else tk.Toplevel()
+    win.title("Settings")
+    # Tall enough for every tab (no scrolling), but never taller than the screen
+    height = min(650, win.winfo_screenheight() - 90)
+    win.geometry(f"850x{height}")
+    win.minsize(700, min(600, height))
+    win.configure(bg=style.BG)
+    style.setup_ttk(win)
 
-    # Stop timer when settings window closes
-    def close_settings():
-        nonlocal away_timer_id
+    # Footer is packed first so the OK / Cancel buttons are always visible
+    footer = tk.Frame(win, bg=style.BG)
+    footer.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
 
-        if away_timer_id is not None:
-            screen.after_cancel(away_timer_id)
-            away_timer_id = None
+    notebook = ttk.Notebook(win)
+    notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+    tabs = {}
+    for name in ("General", "User Information", "Messaging", "Sound Events",
+                 "Network", "File Transfer", "Logging", "Hot Keys"):
+        tabs[name] = tk.Frame(notebook, bg=style.BG)
+        notebook.add(tabs[name], text=name)
 
-        screen.destroy()
+    def heading(tab, title):
+        tk.Label(tab, text=title, font=(style.FONT, 16, "bold"), bg=style.BG,
+                 fg=style.WHITE).pack(anchor="w", padx=22, pady=(10, 6))
 
-    screen.protocol("WM_DELETE_WINDOW", close_settings)
+    vars_ = {}
+    def check(tab, label, key):
+        vars_[key] = tk.BooleanVar(value=bool(data[key]))
+        tk.Checkbutton(tab, text=label, variable=vars_[key], bg=style.BG,
+                       fg=style.WHITE, selectcolor=style.INPUT_BG,
+                       activebackground=style.BG, activeforeground=style.WHITE,
+                       highlightthickness=0).pack(anchor="w", padx=28, pady=2)
+
+    # General options matching the supplied screenshot
+    tab = tabs["General"]
+    heading(tab, "General")
+    tk.Label(tab, text="User List", bg=style.BG, fg=style.WHITE,
+             font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+    tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
+    check(tab, 'Change status to "Away" when screen saver starts', "away_on_screensaver")
+    check(tab, "Set status to Inactive when the application is minimized",
+          "inactive_on_minimize")
+    minutes_row = tk.Frame(tab, bg=style.BG)
+    minutes_row.pack(anchor="w", padx=50, pady=2)
+    tk.Label(minutes_row, text="Change to Inactive after", bg=style.BG,
+             fg=style.WHITE).pack(side="left")
+    minutes_entry = style.make_entry(minutes_row, width=5, justify="center")
+    minutes_entry.insert(0, str(data["inactive_minutes"]))
+    minutes_entry.pack(side="left", padx=8, ipady=2)
+    tk.Label(minutes_row, text="minute(s) of being minimized", bg=style.BG,
+             fg=style.WHITE).pack(side="left")
+    check(tab, "Show taskbar button when list is minimized", "show_taskbar_when_minimized")
+    check(tab, "Hide my own username", "hide_my_username")
+    check(tab, "Hide offline users", "hide_offline_users")
+    check(tab, "Hide users that are away", "hide_away_users")
+    check(tab, "Enable legacy view", "legacy_view")
+
+    def groups():
+        messagebox.showinfo("Groups Settings",
+            "The panel for organizing groups by department will be added in a later update.",
+            parent=win)
+    tk.Button(tab, text="Groups Settings...", command=groups, relief="flat",
+              bg=style.BG, fg=style.ACCENT, activebackground=style.BG,
+              activeforeground=style.ACCENT_HOVER,
+              cursor="hand2").pack(anchor="w", padx=42, pady=5)
+
+    tk.Label(tab, text="Appearance", bg=style.BG, fg=style.WHITE,
+             font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+    tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
+    theme = tk.StringVar(value=data["theme"])
+    language = tk.StringVar(value="English")
+    row = tk.Frame(tab, bg=style.BG); row.pack(anchor="w", padx=50, pady=4)
+    tk.Label(row, text="Theme:", bg=style.BG, fg=style.WHITE).pack(side="left", padx=8)
+    ttk.Combobox(row, textvariable=theme, values=["Auto", "Light", "Dark"],
+                 state="readonly", width=14).pack(side="left")
+    row2 = row  # Language sits on the same line as Theme to save height
+    tk.Label(row2, text="Language:", bg=style.BG, fg=style.WHITE).pack(side="left", padx=(30, 8))
+    ttk.Combobox(row2, textvariable=language, values=["English"],
+                 state="readonly", width=17).pack(side="left")
+
+    # User information
+    tab = tabs["User Information"]; heading(tab, "User Information")
+    tk.Label(tab, text="Display Name", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
+    display = style.make_entry(tab); display.insert(0, data["display_name"])
+    display.pack(anchor="w", padx=25, pady=7, ipady=3)
+    tk.Label(tab, text="Department", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
+    dept = ttk.Combobox(tab, values=["CS", "EC", "Mechanical", "Administration", "IT", "R&D"],
+                        state="readonly", width=24); dept.set(data["department"])
+    dept.pack(anchor="w", padx=25, pady=7)
+
+    # Messaging, sound and logging
+    for tab_name, key, label in [
+        ("Messaging", "enter_to_send", "Press Enter to send messages"),
+        ("Sound Events", "sound_enabled", "Enable sound events"),
+        ("Logging", "logging_enabled", "Enable application logging")
+    ]:
+        heading(tabs[tab_name], tab_name + " Settings")
+        check(tabs[tab_name], label, key)
+
+    # Network
+    tab = tabs["Network"]; heading(tab, "Network Settings")
+    tk.Label(tab, text="Listening Port", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
+    port = style.make_entry(tab); port.insert(0, data["listening_port"])
+    port.pack(anchor="w", padx=25, pady=7, ipady=3)
+    check(tab, "Enable peer discovery", "discover_peers")
+
+    # File transfer
+    tab = tabs["File Transfer"]; heading(tab, "File Transfer Settings")
+    folder = tk.StringVar(value=data["download_folder"])
+    tk.Label(tab, text="Download Folder", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
+    f = tk.Frame(tab, bg=style.BG); f.pack(fill="x", padx=25, pady=8)
+    style.make_entry(f, textvariable=folder).pack(side="left", fill="x", expand=True, ipady=3)
+    style.make_button(f, "Browse", lambda: folder.set(
+        filedialog.askdirectory(parent=win) or folder.get()),
+        kind="secondary", font=style.SMALL_FONT).pack(side="left", padx=5)
+
+    tab = tabs["Hot Keys"]; heading(tab, "Keyboard Shortcuts")
+    tk.Label(tab, text="Open Settings: Ctrl + ,\nSend Message: Enter\nClose Window: Alt + F4",
+             justify="left", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
+
+    def save():
+        p = port.get().strip()
+        if not p.isdigit() or not 1 <= int(p) <= 65535:
+            messagebox.showerror("Invalid Port", "Port must be between 1 and 65535.", parent=win)
+            return
+        minutes = minutes_entry.get().strip()
+        if not minutes.isdigit() or not 1 <= int(minutes) <= 1440:
+            messagebox.showerror("Invalid Time",
+                "Enter the number of minutes as a whole number between 1 and 1440.",
+                parent=win)
+            return
+        new = {k: int(v.get()) for k, v in vars_.items()}
+        new["inactive_minutes"] = int(minutes)
+        new.update(theme=theme.get(), language=language.get(),
+                   display_name=display.get().strip(), department=dept.get().strip(),
+                   listening_port=p, download_folder=folder.get().strip())
+        try:
+            save_settings(user_email, new)
+        except Exception as exc:
+            messagebox.showerror("Save Error", str(exc), parent=win)
+            return
+        if on_save:
+            on_save(new)
+
+        # Apply the chosen theme live ("Auto" follows the operating system)
+        style.apply_theme(main_window, theme.get())
+        style.save_preference(theme.get())
+
+        messagebox.showinfo("Saved", "Your settings have been saved.", parent=win)
+        win.destroy()
+
+    style.make_button(footer, "OK", save, kind="primary", width=12).pack(side="right", padx=5)
+    style.make_button(footer, "Cancel", win.destroy, kind="secondary", width=12).pack(side="right", padx=5)
+    return win
