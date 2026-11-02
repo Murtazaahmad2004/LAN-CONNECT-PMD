@@ -6,7 +6,6 @@ import hmac
 
 from tkinter import messagebox
 from PIL import Image, ImageTk
-from discovery import LANDiscovery, CHART_PORT
 
 import style
 import register
