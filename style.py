@@ -1,4 +1,6 @@
 import json
+import os
+import os
 import subprocess
 import sys
 import tkinter as tk
@@ -392,3 +394,15 @@ def center_window(win, width=None, height=None):
     y = max((screen_h - height) // 2 - 20, 0)
 
     win.geometry(f"{width}x{height}+{x}+{y}")
+    
+def resource_path(filename):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, filename)
+
+
+def data_path(filename):
+    if getattr(sys, "frozen", False):
+        folder = os.path.dirname(sys.executable)
+    else:
+        folder = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(folder, filename)

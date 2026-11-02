@@ -1,19 +1,20 @@
 import os
-from tkinter import messagebox
 import tkinter as tk
 import sqlite3
 import hashlib
 import hmac
 
+from tkinter import messagebox
 from PIL import Image, ImageTk
+from discovery import LANDiscovery, CHART_PORT
 
 import style
 import register
 import home
 
-DB_NAME = "lan_connect_project.db"
+DB_NAME = style.data_path("lan_connect_project.db")
 
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pmd_logo.png")
+LOGO_PATH = style.resource_path("pmd_logo.png")
 PLACEHOLDER_COLOR = "#8A94A6"
 PANEL_WIDTH = 440
 

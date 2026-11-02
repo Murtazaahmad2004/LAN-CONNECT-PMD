@@ -1,16 +1,17 @@
 import atexit
+import socket
 import sqlite3
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk
 
-from discovery import LANDiscovery
+from discovery import CHAT_PORT, LANDiscovery
 import style
 import settings
 
 import pystray
 from PIL import Image, ImageDraw
-
 
 def create_tray_image():
     img = Image.new("RGB", (64, 64), "#2563eb")
@@ -18,7 +19,43 @@ def create_tray_image():
     d.ellipse((16, 16, 48, 48), fill="white")
     return img
 
-DB_NAME = "lan_connect_project.db"
+DB_NAME = style.data_path("lan_connect_project.db")
+
+def save_message(sender, receiver, message):
+    conn = sqlite3.connect(DB_NAME, timeout=30)
+    try:
+        conn.execute(
+            """
+            INSERT INTO messages (sender, receiver, message)
+            VALUES (?, ?, ?)
+            """,
+            (sender, receiver, message),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+        
+class MessageService:
+    def __init__(self, username, on_message, find_peer):
+        self.username = username
+        self.on_message = on_message
+        self.find_peer = find_peer
+        self.running = False
+        self.server = None
+        
+    def start(self):
+        try:
+            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server.bind(("", CHAT_PORT))
+            self.server.listen(10)
+            self.server.settimeout(1.0)
+        except OSError as e:
+            print("Message services could not start:", e)
+            self.server = None
+            return
+        self.running = True
+        threading.Thread(target=self._accept_loop, daemon=True).start()
 
 def open_screen(screen_title):
     screen = tk.Toplevel()
@@ -183,6 +220,8 @@ def home_page(user_email):
         "theme_mode": user_settings.get("theme", "Auto"),
         "inactive_on_minimize": bool(user_settings.get("inactive_on_minimize", 1)),
         "inactive_minutes": int(user_settings.get("inactive_minutes", 5) or 5),
+        "hide_offline_users": bool(user_settings.get("hide_offline_users", 0)),
+        "hide_away_users": bool(user_settings.get("hide_away_users", 0)),
     }
 
     style.set_theme(state["theme_mode"])
@@ -291,10 +330,23 @@ def home_page(user_email):
         for widget in online_users_frame.winfo_children():
             widget.destroy()
 
-        if not known_users:
+        visible_users = [
+            u
+            for u in known_users.values()
+            if not (
+                state["hide_offline_users"]
+                and u.get("status", "Offline") == "Offline"
+            )
+            and not (
+                state["hide_away_users"]
+                and u.get("status") == "Inactive"
+            )
+        ]
+
+        if not visible_users:
             tk.Label(
                 online_users_frame,
-                text="No users discovered",
+                text="No users to show",
                 bg=style.CARD,
                 fg=style.MUTED,
             ).pack(anchor="w", padx=10, pady=5)
@@ -302,7 +354,7 @@ def home_page(user_email):
 
         status_order = {"Online": 0, "Inactive": 1, "Offline": 2}
         sorted_users = sorted(
-            known_users.values(),
+            visible_users,
             key=lambda u: (
                 status_order.get(u.get("status", "Offline"), 2),
                 u["username"].lower(),
@@ -386,9 +438,9 @@ def home_page(user_email):
             return
 
         now = time.monotonic()
-        is_minimized = win.state() == "iconic"
+        is_hidden = win.state() in ("iconic", "withdrawn")
 
-        if is_minimized:
+        if is_hidden:
             if minimized_since is None:
                 minimized_since = now
 
@@ -396,13 +448,15 @@ def home_page(user_email):
                 state["inactive_on_minimize"]
                 and now - minimized_since >= state["inactive_minutes"] * 60
             ):
-                discovery.set_status("Inactive")
+                if discovery.status != "Inactive":
+                    discovery.set_status("Inactive")
         else:
             minimized_since = None
 
             if now - last_activity >= INACTIVE_TIMEOUT:
-                discovery.set_status("Inactive")
-            else:
+                if discovery.status != "Inactive":
+                    discovery.set_status("Inactive")
+            elif discovery.status != "Online":
                 discovery.set_status("Online")
 
         status_after_id = win.after(1000, check_status)
@@ -427,16 +481,21 @@ def home_page(user_email):
         on_update=safe_update_users,
     )
 
+    def on_settings_saved(new):
+        state.update(
+            theme_mode=new["theme"],
+            inactive_on_minimize=bool(new["inactive_on_minimize"]),
+            inactive_minutes=int(new["inactive_minutes"]),
+            hide_offline_users=bool(new["hide_offline_users"]),
+        )
+        render_users()
+
     def open_settings_window():
         settings.open_settings(
             user_email=user_email,
             main_window=win,
             discovery=discovery,
-            on_save=lambda new: state.update(
-                theme_mode=new["theme"],
-                inactive_on_minimize=bool(new["inactive_on_minimize"]),
-                inactive_minutes=int(new["inactive_minutes"]),
-            ),
+            on_save=on_settings_saved,
         )
 
     def toggle_theme():

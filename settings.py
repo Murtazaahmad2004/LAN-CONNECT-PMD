@@ -5,12 +5,12 @@ from pathlib import Path
 from contextlib import contextmanager
 import style
 
-DB_NAME = Path(__file__).resolve().parent / "lan_connect_project.db"
+DB_NAME = style.data_path("lan_connect_project.db")
 
 DEFAULTS = {
     "away_on_screensaver": 1, "show_taskbar_when_minimized": 1,
-    "hide_offline_users": 0, "hide_away_users": 0,
-    "legacy_view": 0, "theme": "Auto", "language": "English",
+    "hide_offline_users": 0,
+    "theme": "Auto", "language": "English",
     "display_name": "", "department": "", "listening_port": "5000",
     "discover_peers": 1, "download_folder": "", "sound_enabled": 1,
     "logging_enabled": 1, "enter_to_send": 1,
@@ -34,7 +34,6 @@ def ensure_settings_table():
         "away_on_screensaver": "INTEGER NOT NULL DEFAULT 1",
         "show_taskbar_when_minimized": "INTEGER NOT NULL DEFAULT 1",
         "hide_offline_users": "INTEGER NOT NULL DEFAULT 0",
-        "hide_away_users": "INTEGER NOT NULL DEFAULT 0",
         "legacy_view": "INTEGER NOT NULL DEFAULT 0",
         "theme": "TEXT NOT NULL DEFAULT 'Auto'",
         "language": "TEXT NOT NULL DEFAULT 'English'",
@@ -141,17 +140,6 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
              fg=style.WHITE).pack(side="left")
     check(tab, "Show taskbar button when list is minimized", "show_taskbar_when_minimized")
     check(tab, "Hide offline users", "hide_offline_users")
-    check(tab, "Hide users that are away", "hide_away_users")
-    check(tab, "Enable legacy view", "legacy_view")
-
-    def groups():
-        messagebox.showinfo("Groups Settings",
-            "The panel for organizing groups by department will be added in a later update.",
-            parent=win)
-    tk.Button(tab, text="Groups Settings...", command=groups, relief="flat",
-              bg=style.BG, fg=style.ACCENT, activebackground=style.BG,
-              activeforeground=style.ACCENT_HOVER,
-              cursor="hand2").pack(anchor="w", padx=42, pady=5)
 
     tk.Label(tab, text="Appearance", bg=style.BG, fg=style.WHITE,
              font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
