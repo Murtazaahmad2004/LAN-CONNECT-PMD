@@ -1,13 +1,31 @@
+import os
 import sqlite3
 import hashlib
 import secrets
 import tkinter as tk
+
 from tkinter import messagebox
+from PIL import Image, ImageTk
+
 import style
 
 DB_NAME = "lan_connect_project.db"
 
-# Create database and table if they do not exist
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pmd_logo.png")
+PLACEHOLDER_COLOR = "#8A94A6"
+PANEL_WIDTH = 440
+
+
+def load_logo(max_height=220):
+    try:
+        img = Image.open(LOGO_PATH).convert("RGBA")
+        ratio = max_height / img.height
+        img = img.resize((int(img.width * ratio), max_height), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+    except Exception:
+        return None
+
+
 def create_database():
     conn = sqlite3.connect(DB_NAME)
 
@@ -30,7 +48,7 @@ def create_database():
     finally:
         conn.close()
 
-# Hash password before saving it
+
 def hash_password(password):
     salt = secrets.token_bytes(16)
 
@@ -40,8 +58,8 @@ def hash_password(password):
 
     return salt.hex() + ":" + password_hash.hex()
 
+
 def open_register():
-    # Ensure database and table exist
     try:
         create_database()
     except sqlite3.Error as e:
@@ -49,188 +67,253 @@ def open_register():
         return
 
     win = tk.Toplevel()
-    win.title("Register")
-    win.geometry(style.WINDOW_SIZE)
+    win.title("LAN Connect - Register")
+    style.center_window(win)
+    win.minsize(760, 640)
     win.configure(bg=style.BG)
 
-    card = tk.Frame(
+    password_visible = {"value": False}
+    placeholder_state = {}
+
+    left_side = tk.Frame(win, bg=style.BG)
+    left_side.place(x=0, y=0, relwidth=1, relheight=1, width=-PANEL_WIDTH)
+
+    brand = tk.Frame(left_side, bg=style.BG)
+    brand.place(relx=0.5, rely=0.5, anchor="center")
+
+    logo_image = load_logo()
+    if logo_image:
+        logo_holder = tk.Frame(brand, bg="#FFFFFF", padx=20, pady=20)
+        logo_holder.pack()
+
+        logo_label = tk.Label(logo_holder, image=logo_image, bg="#FFFFFF")
+        logo_label.image = logo_image
+        logo_label.pack()
+    else:
+        tk.Label(
+            brand,
+            text="PMD",
+            font=("Segoe UI", 56, "bold"),
+            bg=style.BG,
+            fg=style.ACCENT,
+        ).pack()
+
+    tk.Label(
+        brand,
+        text="LAN Connect",
+        font=("Segoe UI", 28, "bold"),
+        bg=style.BG,
+        fg=style.WHITE,
+    ).pack(pady=(16, 0))
+
+    tk.Label(
+        brand,
+        text="Chat and share files on your local network",
+        font=("Segoe UI", 11),
+        bg=style.BG,
+        fg=style.MUTED,
+    ).pack(pady=(6, 0))
+
+    right_panel = tk.Frame(
         win,
         bg=style.CARD,
-        padx=38,
-        pady=28,
         highlightbackground=style.BORDER,
         highlightthickness=1,
     )
-    card.pack(pady=25)
+    right_panel.place(relx=1.0, rely=0, anchor="ne", relheight=1.0, width=PANEL_WIDTH)
 
-    heading = tk.Label(
+    card = tk.Frame(right_panel, bg=style.CARD)
+    card.place(relx=0.5, rely=0.5, anchor="center", width=380)
+
+    tk.Label(
         card,
-        text="Create an Account",
-        font=style.TITLE_FONT,
-        fg=style.WHITE,
+        text="Create Account",
+        font=("Segoe UI", 22, "bold"),
         bg=style.CARD,
-    )
-    heading.pack(pady=(0, 15))
+        fg=style.WHITE,
+    ).pack(anchor="w")
 
-    # Create labels and input fields
-    def create_input_fields(label_text, show=None):
-        label = tk.Label(
-            card,
-            text=label_text,
-            font=style.LABEL_FONT,
-            fg=style.WHITE,
-            bg=style.CARD,
-            anchor="w",
-            justify="left",
-        )
-        label.pack(fill="x", pady=(5, 3))
+    tk.Label(
+        card,
+        text="Fill in your details to get started",
+        font=("Segoe UI", 10),
+        bg=style.CARD,
+        fg=style.MUTED,
+    ).pack(anchor="w", pady=(2, 18))
 
-        entry = tk.Entry(
-            card,
-            font=style.INPUT_FONT,
-            bg=style.INPUT_BG,
-            fg=style.BLACK,
-            relief="flat",
-            show=show,
-        )
-        entry.pack(fill="x", ipady=6)
+    def add_placeholder(entry, placeholder, secret=False):
+        placeholder_state[entry] = True
 
-        return entry
+        def current_mask():
+            if secret and not password_visible["value"]:
+                return "•"
+            return ""
 
-    # Reusable placeholder function
-    def add_placeholder(entry, placeholder, is_password=False):
-        entry.insert(0, placeholder)
-        entry.config(fg="gray")
+        def show_placeholder():
+            entry.delete(0, tk.END)
+            entry.insert(0, placeholder)
+            entry.config(fg=PLACEHOLDER_COLOR, show="")
+            placeholder_state[entry] = True
 
         def on_focus_in(event):
-            if entry.get() == placeholder:
+            if placeholder_state[entry]:
                 entry.delete(0, tk.END)
-                entry.config(fg=style.BLACK)
-
-                if is_password:
-                    entry.config(show="*")
+                entry.config(fg=style.BLACK, show=current_mask())
+                placeholder_state[entry] = False
 
         def on_focus_out(event):
-            if not entry.get().strip():
-                entry.delete(0, tk.END)
-                entry.insert(0, placeholder)
-                entry.config(fg="gray")
-
-                if is_password:
-                    entry.config(show="")
+            if not entry.get():
+                show_placeholder()
 
         entry.bind("<FocusIn>", on_focus_in)
         entry.bind("<FocusOut>", on_focus_out)
+        entry.reset_placeholder = show_placeholder
+        show_placeholder()
 
-    # Form fields
-    first_name = create_input_fields("First Name")
-    add_placeholder(first_name, "Enter First Name")
+    def get_text(entry):
+        if placeholder_state.get(entry):
+            return ""
+        return entry.get()
 
-    last_name = create_input_fields("Last Name")
-    add_placeholder(last_name, "Enter Last Name")
+    def make_field(parent, label_text, placeholder, secret=False):
+        tk.Label(
+            parent,
+            text=label_text,
+            font=("Segoe UI", 9, "bold"),
+            bg=style.CARD,
+            fg=style.WHITE,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 4))
 
-    department = create_input_fields("Department")
-    add_placeholder(department, "Enter Department")
+        wrap = tk.Frame(
+            parent,
+            bg=style.INPUT_BG,
+            highlightbackground=style.BORDER,
+            highlightcolor=style.ACCENT,
+            highlightthickness=1,
+        )
+        wrap.pack(fill="x", pady=(0, 12))
 
-    job_title = create_input_fields("Job Title")
-    add_placeholder(job_title, "Enter Job Title")
+        entry = tk.Entry(
+            wrap,
+            font=("Segoe UI", 11),
+            bg=style.INPUT_BG,
+            fg=style.BLACK,
+            insertbackground=style.BLACK,
+            relief="flat",
+            bd=0,
+            show="•" if secret else "",
+        )
+        entry.pack(side="left", fill="x", expand=True, padx=(10, 4), ipady=7)
 
-    email = create_input_fields("Email")
-    add_placeholder(email, "Enter Email")
+        add_placeholder(entry, placeholder, secret=secret)
+        return entry, wrap
 
-    password = create_input_fields("Password")
-    add_placeholder(password, "Enter Password", is_password=True)
+    def make_row():
+        row = tk.Frame(card, bg=style.CARD)
+        row.pack(fill="x")
 
-    # Register button action
-    def register_user():
-        first = first_name.get().strip()
-        last = last_name.get().strip()
-        dept = department.get().strip()
-        job = job_title.get().strip()
-        mail = email.get().strip()
-        user_pass = password.get()
+        left = tk.Frame(row, bg=style.CARD)
+        left.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        # Check empty fields and placeholders
-        values = [
-            (first, "Enter First Name"),
-            (last, "Enter Last Name"),
-            (dept, "Enter Department"),
-            (job, "Enter Job Title"),
-            (mail, "Enter Email"),
-            (user_pass, "Enter Password"),
-        ]
+        right = tk.Frame(row, bg=style.CARD)
+        right.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        if any(not value or value == placeholder for value, placeholder in values):
-            messagebox.showwarning(
-                "Missing Information", "Please fill in all fields.", parent=win
-            )
+        return left, right
+
+    name_left, name_right = make_row()
+    first_name, _ = make_field(name_left, "First Name", "First name")
+    last_name, _ = make_field(name_right, "Last Name", "Last name")
+
+    job_left, job_right = make_row()
+    department, _ = make_field(job_left, "Department", "Department")
+    job_title, _ = make_field(job_right, "Job Title", "Job title")
+
+    email, _ = make_field(card, "Email", "Enter your email")
+    password, password_wrap = make_field(
+        card, "Password", "At least 8 characters", secret=True
+    )
+
+    eye = tk.Label(
+        password_wrap,
+        text="👁",
+        font=("Segoe UI Emoji", 11),
+        bg=style.INPUT_BG,
+        fg=style.MUTED,
+        cursor="hand2",
+    )
+    eye.pack(side="right", padx=(0, 10))
+
+    def toggle_password(event=None):
+        password_visible["value"] = not password_visible["value"]
+        eye.config(fg=style.ACCENT if password_visible["value"] else style.MUTED)
+
+        if not placeholder_state.get(password):
+            password.config(show="" if password_visible["value"] else "•")
+
+    eye.bind("<Button-1>", toggle_password)
+
+    error_label = tk.Label(
+        card,
+        text="",
+        font=("Segoe UI", 9),
+        bg=style.CARD,
+        fg="#ef4444",
+        anchor="w",
+        wraplength=380,
+        justify="left",
+    )
+    error_label.pack(fill="x", pady=(0, 6))
+
+    def show_error(message):
+        error_label.config(text=message)
+
+    def register_user(event=None):
+        first = get_text(first_name).strip()
+        last = get_text(last_name).strip()
+        dept = get_text(department).strip()
+        job = get_text(job_title).strip()
+        mail = get_text(email).strip()
+        user_pass = get_text(password)
+
+        if not all([first, last, dept, job, mail, user_pass]):
+            show_error("Please fill in all fields.")
             return
 
-        # Basic email validation
         if (
             mail.count("@") != 1
             or mail.startswith("@")
             or "." not in mail.split("@")[1]
             or mail.endswith(".")
         ):
-            messagebox.showwarning(
-                "Invalid Email", "Please enter a valid email address.", parent=win
-            )
+            show_error("Please enter a valid email address.")
             return
 
         if len(user_pass) < 8:
-            messagebox.showwarning(
-                "Weak Password",
-                "Password must be at least 8 characters long.",
-                parent=win,
-            )
+            show_error("Password must be at least 8 characters long.")
             return
 
-        # Save user in database
         conn = None
+        success = False
 
         try:
             conn = sqlite3.connect(DB_NAME)
             c = conn.cursor()
-
-            hashed_password = hash_password(user_pass)
 
             c.execute(
                 """
                 INSERT INTO register
                 (firstname, lastname, department, jobtitle, email, password)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (first, last, dept, job, mail.lower(), hashed_password),
+                """,
+                (first, last, dept, job, mail.lower(), hash_password(user_pass)),
             )
 
             conn.commit()
-
-            messagebox.showinfo(
-                "Registration Successful",
-                "Your account has been created successfully!",
-                parent=win,
-            )
-
-            # Clear form after successful registration
-            for entry, placeholder in [
-                (first_name, "Enter First Name"),
-                (last_name, "Enter Last Name"),
-                (department, "Enter Department"),
-                (job_title, "Enter Job Title"),
-                (email, "Enter Email"),
-                (password, "Enter Password"),
-            ]:
-                entry.delete(0, tk.END)
-                entry.config(fg="gray", show="")
-                entry.insert(0, placeholder)
+            success = True
 
         except sqlite3.IntegrityError:
-            messagebox.showwarning(
-                "Email Already Registered",
-                "An account with this email already exists.",
-                parent=win,
-            )
+            show_error("An account with this email already exists.")
 
         except sqlite3.Error as e:
             messagebox.showerror(
@@ -241,15 +324,51 @@ def open_register():
             if conn is not None:
                 conn.close()
 
-    register_button = tk.Button(
-        card,
-        text="Register",
-        font=style.BUTTON_FONT,
-        bg=style.ACCENT,
-        fg=style.BG,
-        activebackground=style.ACCENT_HOVER,
-        relief="flat",
-        cursor="hand2",
-        command=register_user,
+        if success:
+            messagebox.showinfo(
+                "Registration Successful",
+                "Your account has been created successfully!",
+                parent=win,
+            )
+            win.destroy()
+
+    style.make_button(card, "Register", register_user, kind="primary").pack(
+        fill="x", pady=(4, 0)
     )
-    register_button.pack(fill="x", pady=(18, 8), ipady=5)
+
+    footer = tk.Frame(card, bg=style.CARD)
+    footer.pack(pady=(18, 0))
+
+    tk.Label(
+        footer,
+        text="Already have an account?",
+        font=("Segoe UI", 10),
+        bg=style.CARD,
+        fg=style.MUTED,
+    ).pack(side="left")
+
+    login_link = tk.Label(
+        footer,
+        text=" Login",
+        font=("Segoe UI", 10, "bold"),
+        bg=style.CARD,
+        fg=style.ACCENT,
+        cursor="hand2",
+    )
+    login_link.pack(side="left")
+    login_link.bind("<Button-1>", lambda e: win.destroy())
+    login_link.bind("<Enter>", lambda e: login_link.config(font=("Segoe UI", 10, "bold underline")))
+    login_link.bind("<Leave>", lambda e: login_link.config(font=("Segoe UI", 10, "bold")))
+
+    fields = [first_name, last_name, department, job_title, email, password]
+
+    for index, entry in enumerate(fields):
+        entry.bind("<Key>", lambda e: show_error(""), add="+")
+
+        if index < len(fields) - 1:
+            next_entry = fields[index + 1]
+            entry.bind("<Return>", lambda e, nxt=next_entry: nxt.focus_set())
+        else:
+            entry.bind("<Return>", register_user)
+
+    win.focus_set()

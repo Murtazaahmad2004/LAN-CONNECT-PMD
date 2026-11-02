@@ -18,9 +18,7 @@ def create_tray_image():
     d.ellipse((16, 16, 48, 48), fill="white")
     return img
 
-
 DB_NAME = "lan_connect_project.db"
-
 
 def open_screen(screen_title):
     screen = tk.Toplevel()
@@ -69,7 +67,6 @@ def create_chat_table():
         conn.commit()
     finally:
         conn.close()
-
 
 def open_chat(parent, firstname, lastname, email):
     for widget in parent.winfo_children():
@@ -194,7 +191,7 @@ def home_page(user_email):
     win = tk.Tk()
     win.title("Home")
     create_chat_table()
-    win.geometry(style.WINDOW_SIZE)
+    style.center_window(win)
     win.configure(bg=style.BG)
     style.setup_ttk(win)
 

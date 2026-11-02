@@ -372,3 +372,23 @@ def make_entry(parent, **options):
 
 # Initialise with the user's last saved choice (Auto by default).
 set_theme(load_preference())
+
+def center_window(win, width=None, height=None):
+    win.update_idletasks()
+
+    if width is None or height is None:
+        try:
+            width, height = map(int, WINDOW_SIZE.split("+")[0].split("x"))
+        except (ValueError, AttributeError):
+            width, height = win.winfo_reqwidth(), win.winfo_reqheight()
+
+    screen_w = win.winfo_screenwidth()
+    screen_h = win.winfo_screenheight()
+
+    width = min(width, screen_w)
+    height = min(height, screen_h - 80)
+
+    x = max((screen_w - width) // 2, 0)
+    y = max((screen_h - height) // 2 - 20, 0)
+
+    win.geometry(f"{width}x{height}+{x}+{y}")

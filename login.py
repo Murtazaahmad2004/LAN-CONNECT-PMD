@@ -1,50 +1,212 @@
-from ast import Lambda
+import os
 from tkinter import messagebox
 import tkinter as tk
-import style
-import register
 import sqlite3
 import hashlib
 import hmac
+
+from PIL import Image, ImageTk
+
+import style
+import register
 import home
+
+DB_NAME = "lan_connect_project.db"
+
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pmd_logo.png")
+PLACEHOLDER_COLOR = "#8A94A6"
+PANEL_WIDTH = 440
+
+def load_logo(max_height=220):
+    try:
+        img = Image.open(LOGO_PATH).convert("RGBA")
+        ratio = max_height / img.height
+        img = img.resize((int(img.width * ratio), max_height), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+    except Exception:
+        return None
 
 def show_login():
     win = tk.Tk()
-    win.title("Login")
+    win.title("LAN Connect - Login")
+    style.center_window(win)
+    win.minsize(760, 520)
     win.configure(bg=style.BG)
 
-    # Login Card
-    card = tk.Frame(
+    password_visible = {"value": False}
+
+    left_side = tk.Frame(win, bg=style.BG)
+    left_side.place(x=0, y=0, relwidth=1, relheight=1, width=-PANEL_WIDTH)
+
+    brand = tk.Frame(left_side, bg=style.BG)
+    brand.place(relx=0.5, rely=0.5, anchor="center")
+
+    logo_image = load_logo()
+    if logo_image:
+        logo_holder = tk.Frame(brand, bg="#FFFFFF", padx=20, pady=20)
+        logo_holder.pack()
+
+        logo_label = tk.Label(logo_holder, image=logo_image, bg="#FFFFFF")
+        logo_label.image = logo_image
+        logo_label.pack()
+    else:
+        tk.Label(
+            brand,
+            text="PMD",
+            font=("Segoe UI", 56, "bold"),
+            bg=style.BG,
+            fg=style.ACCENT,
+        ).pack()
+
+    tk.Label(
+        brand,
+        text="LAN Connect",
+        font=("Segoe UI", 28, "bold"),
+        bg=style.BG,
+        fg=style.WHITE,
+    ).pack(pady=(16, 0))
+
+    tk.Label(
+        brand,
+        text="Chat and share files on your local network",
+        font=("Segoe UI", 11),
+        bg=style.BG,
+        fg=style.MUTED,
+    ).pack(pady=(6, 0))
+
+    right_panel = tk.Frame(
         win,
         bg=style.CARD,
-        padx=38,
-        pady=28,
         highlightbackground=style.BORDER,
         highlightthickness=1,
     )
-    card.place(
-        relx=0.5,
-        rely=0.5,
-        anchor="center",
-        height=300
-    )
+    right_panel.place(relx=1.0, rely=0, anchor="ne", relheight=1.0, width=PANEL_WIDTH)
 
-    heading = tk.Label(
+    card = tk.Frame(right_panel, bg=style.CARD)
+    card.place(relx=0.5, rely=0.5, anchor="center", width=340)
+
+    tk.Label(
         card,
-        text="Login",
-        font=style.TITLE_FONT,
+        text="Welcome Back",
+        font=("Segoe UI", 22, "bold"),
+        bg=style.CARD,
         fg=style.WHITE,
-        bg=style.CARD
-    )
-    heading.pack(pady=(0, 15))
+    ).pack(anchor="w")
 
-    entryUser = tk.Entry(
+    tk.Label(
         card,
-        font=style.INPUT_FONT,
+        text="Sign in to continue",
+        font=("Segoe UI", 10),
+        bg=style.CARD,
+        fg=style.MUTED,
+    ).pack(anchor="w", pady=(2, 24))
+
+    placeholder_state = {}
+
+    def add_placeholder(entry, placeholder, secret=False):
+        placeholder_state[entry] = True
+
+        def current_mask():
+            if secret and not password_visible["value"]:
+                return "•"
+            return ""
+
+        def show_placeholder():
+            entry.delete(0, tk.END)
+            entry.insert(0, placeholder)
+            entry.config(fg=PLACEHOLDER_COLOR, show="")
+            placeholder_state[entry] = True
+
+        def on_focus_in(event):
+            if placeholder_state[entry]:
+                entry.delete(0, tk.END)
+                entry.config(fg=style.BLACK, show=current_mask())
+                placeholder_state[entry] = False
+
+        def on_focus_out(event):
+            if not entry.get():
+                show_placeholder()
+
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+        show_placeholder()
+
+    def get_text(entry):
+        if placeholder_state.get(entry):
+            return ""
+        return entry.get()
+
+    def make_field(label_text, show=None):
+        tk.Label(
+            card,
+            text=label_text,
+            font=("Segoe UI", 9, "bold"),
+            bg=style.CARD,
+            fg=style.WHITE,
+            anchor="w",
+        ).pack(fill="x", pady=(0, 5))
+
+        wrap = tk.Frame(
+            card,
+            bg=style.INPUT_BG,
+            highlightbackground=style.BORDER,
+            highlightcolor=style.ACCENT,
+            highlightthickness=1,
+        )
+        wrap.pack(fill="x", pady=(0, 14))
+
+        entry = tk.Entry(
+            wrap,
+            font=("Segoe UI", 11),
+            bg=style.INPUT_BG,
+            fg=style.BLACK,
+            insertbackground=style.BLACK,
+            relief="flat",
+            bd=0,
+            show=show or "",
+        )
+        entry.pack(side="left", fill="x", expand=True, padx=(10, 4), ipady=8)
+        return entry, wrap
+
+    entry_email, _ = make_field("Email")
+    entry_password, password_wrap = make_field("Password", show="•")
+
+    add_placeholder(entry_email, "Email")
+    add_placeholder(entry_password, "Password", secret=True)
+
+    eye = tk.Label(
+        password_wrap,
+        text="👁",
+        font=("Segoe UI Emoji", 11),
         bg=style.INPUT_BG,
-        fg=style.WHITE,
-        relief="flat"
+        fg=style.MUTED,
+        cursor="hand2",
     )
+    eye.pack(side="right", padx=(0, 10))
+
+    def toggle_password(event=None):
+        password_visible["value"] = not password_visible["value"]
+        eye.config(fg=style.ACCENT if password_visible["value"] else style.MUTED)
+
+        if not placeholder_state.get(entry_password):
+            entry_password.config(show="" if password_visible["value"] else "•")
+
+    eye.bind("<Button-1>", toggle_password)
+
+    error_label = tk.Label(
+        card,
+        text="",
+        font=("Segoe UI", 9),
+        bg=style.CARD,
+        fg="#ef4444",
+        anchor="w",
+        wraplength=340,
+        justify="left",
+    )
+    error_label.pack(fill="x", pady=(0, 6))
+
+    def show_error(message):
+        error_label.config(text=message)
 
     def verify_password(entered_password, stored_password):
         try:
@@ -56,168 +218,102 @@ def show_login():
                 "sha256",
                 entered_password.encode("utf-8"),
                 salt,
-                200000
+                200000,
             )
 
             return hmac.compare_digest(actual_hash, expected_hash)
 
         except (ValueError, TypeError):
             return False
-        
-    def check():
-        email = entryUser.get().strip().lower()
-        password = entrypassword.get()
 
-        if (
-            not email
-            or email == "Email"
-            or not password
-            or password == "Password"
-        ):
-            messagebox.showwarning(
-                "Missing Information",
-                "Please enter your email and password.",
-                parent=win
-            )
+    def check(event=None):
+        email = get_text(entry_email).strip().lower()
+        password = get_text(entry_password)
+
+        if not email or not password:
+            show_error("Please enter your email and password.")
             return
 
+        authenticated = False
         conn = None
 
         try:
-            conn = sqlite3.connect("lan_connect_project.db")
+            conn = sqlite3.connect(DB_NAME, timeout=30)
             c = conn.cursor()
-
-            c.execute(
-                "SELECT password FROM register WHERE email = ?",
-                (email,)
-            )
-
+            c.execute("SELECT password FROM register WHERE email = ?", (email,))
             user = c.fetchone()
+            c.close()
 
-            if user is not None and verify_password(password, user[0]):
-                messagebox.showinfo(
-                    "Login Successful",
-                    "Login successful!",
-                    parent=win
-                )
-
-                win.destroy()
-                home.home_page(email)
-
-            else:
-                messagebox.showerror(
-                    "Login Failed",
-                    "Incorrect email or password.",
-                    parent=win
-                )
+            authenticated = user is not None and verify_password(password, user[0])
 
         except sqlite3.Error as e:
             messagebox.showerror(
                 "Database Error",
                 f"Could not access the database:\n{e}",
-                parent=win
+                parent=win,
             )
+            return
 
         finally:
             if conn is not None:
                 conn.close()
-            
-    def add_placeholder_email(entry, placeholder):
-        placeholder_color = "#2D3642"
-        text_color = style.BLACK
-        
-        def on_focus_in(event):
-            if entry.get() == placeholder:
-                entry.delete(0, tk.END)
-                entry.config(fg=text_color)
-                
-        def on_focus_out(event):
-            if not entry.get().strip():
-                entry.delete(0, tk.END)
-                entry.insert(0, placeholder)
-                entry.config(fg=placeholder_color)
-                
-        entry.config(show="")
-        entry.insert(0, placeholder)
-        entry.config(fg=placeholder_color)
-        
-        entry.bind("<FocusIn>", on_focus_in)
-        entry.bind("<FocusOut>", on_focus_out)
 
-    def add_placeholder_password(entry, placeholder):
-        placeholder_color = "#2D3642"
-        text_color = style.BLACK
-        
-        def on_focus_in(event):
-            if entry.get() == placeholder:
-                entry.delete(0, tk.END)
-                entry.config(fg=text_color, show="*")
-        
-        def on_focus_out(event):
-            if not entry.get().strip():
-                entry.config(show="")
-                entry.delete(0, tk.END)
-                entry.insert(0, placeholder)
-                entry.config(fg=placeholder_color)
+        if authenticated:
+            win.destroy()
+            home.home_page(email)
+        else:
+            show_error("Incorrect email or password.")
 
-        entry.config(show="")
-        entry.insert(0, placeholder)
-        entry.config(fg=placeholder_color)
-        
-        entry.bind("<FocusIn>", on_focus_in)
-        entry.bind("<FocusOut>", on_focus_out)
-        
-    win.geometry(style.WINDOW_SIZE)
+    style.make_button(card, "Login", check, kind="primary").pack(
+        fill="x", pady=(4, 0)
+    )
 
-    userlabel = tk.Label(
-        card,
-        text="Email",
-        font=style.LABEL_FONT,
-        fg=style.WHITE,
+    divider = tk.Frame(card, bg=style.CARD)
+    divider.pack(fill="x", pady=18)
+    tk.Frame(divider, bg=style.BORDER, height=1).pack(
+        side="left", fill="x", expand=True, pady=6
+    )
+    tk.Label(
+        divider,
+        text="  or  ",
+        font=("Segoe UI", 9),
         bg=style.CARD,
-        anchor="w",
-        justify="left"
+        fg=style.MUTED,
+    ).pack(side="left")
+    tk.Frame(divider, bg=style.BORDER, height=1).pack(
+        side="left", fill="x", expand=True, pady=6
     )
-    userlabel.pack(fill="x", pady=(0, 5))
 
-    entryUser = tk.Entry(
-        card, 
-        font=style.INPUT_FONT, 
-        bg=style.INPUT_BG, 
-        fg=style.BLACK, 
-        relief="flat"
-    )
-    entryUser.pack()
-    add_placeholder_email(entryUser, "Email")
+    footer = tk.Frame(card, bg=style.CARD)
+    footer.pack()
 
-    userpassword = tk.Label(
-        card, 
-        text="Password", 
-        font=style.LABEL_FONT, 
-        fg=style.WHITE, 
+    tk.Label(
+        footer,
+        text="Don't have an account?",
+        font=("Segoe UI", 10),
         bg=style.CARD,
-        anchor="w",
-        justify="left"
+        fg=style.MUTED,
+    ).pack(side="left")
+
+    register_link = tk.Label(
+        footer,
+        text=" Register",
+        font=("Segoe UI", 10, "bold"),
+        bg=style.CARD,
+        fg=style.ACCENT,
+        cursor="hand2",
     )
-    userpassword.pack(fill="x", pady=(10, 5))
+    register_link.pack(side="left")
+    register_link.bind("<Button-1>", lambda e: register.open_register())
+    register_link.bind("<Enter>", lambda e: register_link.config(font=("Segoe UI", 10, "bold underline")))
+    register_link.bind("<Leave>", lambda e: register_link.config(font=("Segoe UI", 10, "bold")))
 
-    entrypassword = tk.Entry(
-        card, 
-        font=style.INPUT_FONT, 
-        bg=style.INPUT_BG, 
-        fg=style.BLACK, 
-        relief="flat", 
-        show = '*'
-    )
-    entrypassword.pack(pady=(3, 0))
-    add_placeholder_password(entrypassword, "Password")
+    entry_email.bind("<Return>", lambda e: entry_password.focus_set())
+    entry_password.bind("<Return>", check)
+    entry_email.bind("<Key>", lambda e: show_error(""))
+    entry_password.bind("<Key>", lambda e: show_error(""))
 
-    btn = tk.Button(card, text="Login", command=check)
-    btn.pack(side="left", padx=4, pady=15)
-
-    btn = tk.Button(card, text="Register", command=register.open_register)
-    btn.pack(side="right", padx=3, pady=15)
-
+    win.focus_set()
     win.mainloop()
 
 if __name__ == "__main__":

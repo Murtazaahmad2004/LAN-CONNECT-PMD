@@ -2,13 +2,14 @@ import sqlite3
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
+from contextlib import contextmanager
 import style
 
 DB_NAME = Path(__file__).resolve().parent / "lan_connect_project.db"
 
 DEFAULTS = {
     "away_on_screensaver": 1, "show_taskbar_when_minimized": 1,
-    "hide_my_username": 0, "hide_offline_users": 0, "hide_away_users": 0,
+    "hide_offline_users": 0, "hide_away_users": 0,
     "legacy_view": 0, "theme": "Auto", "language": "English",
     "display_name": "", "department": "", "listening_port": "5000",
     "discover_peers": 1, "download_folder": "", "sound_enabled": 1,
@@ -16,14 +17,22 @@ DEFAULTS = {
     "inactive_on_minimize": 1, "inactive_minutes": 5
 }
 
+@contextmanager
 def _db():
-    return sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=30)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def ensure_settings_table():
     definitions = {
         "away_on_screensaver": "INTEGER NOT NULL DEFAULT 1",
         "show_taskbar_when_minimized": "INTEGER NOT NULL DEFAULT 1",
-        "hide_my_username": "INTEGER NOT NULL DEFAULT 0",
         "hide_offline_users": "INTEGER NOT NULL DEFAULT 0",
         "hide_away_users": "INTEGER NOT NULL DEFAULT 0",
         "legacy_view": "INTEGER NOT NULL DEFAULT 0",
@@ -53,9 +62,11 @@ def load_settings(user_email=""):
     result = DEFAULTS.copy()
     if user_email:
         with _db() as conn:
-            row = conn.execute("SELECT * FROM app_settings WHERE user_email=?",
-                               (user_email,)).fetchone()
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(app_settings)")]
+            cur = conn.execute(
+                "SELECT * FROM app_settings WHERE user_email=?", (user_email,)
+            )
+            row = cur.fetchone()
+            cols = [d[0] for d in cur.description]
         if row:
             saved = dict(zip(cols, row))
             result.update({k: saved[k] for k in DEFAULTS if k in saved})
@@ -72,7 +83,7 @@ def save_settings(user_email, values):
         conn.execute(
             f"INSERT OR REPLACE INTO app_settings ({','.join(cols)}) "
             f"VALUES ({','.join('?' for _ in cols)})",
-            [user_email] + [data[k] for k in DEFAULTS]
+            [user_email] + [data[k] for k in DEFAULTS],
         )
 
 def open_settings(user_email="", main_window=None, discovery=None, on_save=None):
@@ -81,7 +92,7 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     win.title("Settings")
     # Tall enough for every tab (no scrolling), but never taller than the screen
     height = min(650, win.winfo_screenheight() - 90)
-    win.geometry(f"850x{height}")
+    style.center_window(win, 850, int(height))
     win.minsize(700, min(600, height))
     win.configure(bg=style.BG)
     style.setup_ttk(win)
@@ -129,7 +140,6 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     tk.Label(minutes_row, text="minute(s) of being minimized", bg=style.BG,
              fg=style.WHITE).pack(side="left")
     check(tab, "Show taskbar button when list is minimized", "show_taskbar_when_minimized")
-    check(tab, "Hide my own username", "hide_my_username")
     check(tab, "Hide offline users", "hide_offline_users")
     check(tab, "Hide users that are away", "hide_away_users")
     check(tab, "Enable legacy view", "legacy_view")
