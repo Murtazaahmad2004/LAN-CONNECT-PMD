@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -7,6 +8,12 @@ import style
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
+DEFAULT_QUICK_MESSAGES = ["OK", "Thanks", "Busy right now, will reply soon",
+                          "Call me please", "Be right back"]
+
+# Message font sizes (used by Messaging tab and by your chat window)
+FONT_SIZES = {"Normal": 10, "Large": 13, "Extra large": 16}
+
 DEFAULTS = {
     "away_on_screensaver": 1, "show_taskbar_when_minimized": 1,
     "hide_offline_users": 0,
@@ -14,7 +21,16 @@ DEFAULTS = {
     "display_name": "", "department": "", "listening_port": "5000",
     "discover_peers": 1, "download_folder": "", "sound_enabled": 1,
     "logging_enabled": 1, "enter_to_send": 1,
-    "inactive_on_minimize": 1, "inactive_minutes": 5
+    "inactive_on_minimize": 1, "inactive_minutes": 5,
+    # ---- Message Window (Messaging tab) ----
+    "message_mode": "conversation",          # "single" or "conversation"
+    "display_recent_messages": 1,
+    "hide_date_in_timestamp": 1,
+    "incoming_behavior": "foreground",       # "taskbar" or "foreground"
+    "keep_focus": 0,
+    "spell_check": 1,
+    "font_size": "Large",                    # Normal / Large / Extra large
+    "quick_messages": json.dumps(DEFAULT_QUICK_MESSAGES),
 }
 
 @contextmanager
@@ -46,7 +62,15 @@ def ensure_settings_table():
         "logging_enabled": "INTEGER NOT NULL DEFAULT 1",
         "enter_to_send": "INTEGER NOT NULL DEFAULT 1",
         "inactive_on_minimize": "INTEGER NOT NULL DEFAULT 1",
-        "inactive_minutes": "INTEGER NOT NULL DEFAULT 5"
+        "inactive_minutes": "INTEGER NOT NULL DEFAULT 5",
+        "message_mode": "TEXT NOT NULL DEFAULT 'conversation'",
+        "display_recent_messages": "INTEGER NOT NULL DEFAULT 1",
+        "hide_date_in_timestamp": "INTEGER NOT NULL DEFAULT 1",
+        "incoming_behavior": "TEXT NOT NULL DEFAULT 'foreground'",
+        "keep_focus": "INTEGER NOT NULL DEFAULT 0",
+        "spell_check": "INTEGER NOT NULL DEFAULT 1",
+        "font_size": "TEXT NOT NULL DEFAULT 'Large'",
+        "quick_messages": "TEXT DEFAULT ''",
     }
     with _db() as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS app_settings
@@ -68,7 +92,8 @@ def load_settings(user_email=""):
             cols = [d[0] for d in cur.description]
         if row:
             saved = dict(zip(cols, row))
-            result.update({k: saved[k] for k in DEFAULTS if k in saved})
+            result.update({k: saved[k] for k in DEFAULTS
+                           if k in saved and saved[k] not in (None, "")})
     return result
 
 def save_settings(user_email, values):
@@ -84,6 +109,19 @@ def save_settings(user_email, values):
             f"VALUES ({','.join('?' for _ in cols)})",
             [user_email] + [data[k] for k in DEFAULTS],
         )
+
+# ---------- Helpers for your chat / message window ----------
+def message_font(size_name):
+    """Returns a tkinter font tuple for the chosen font size."""
+    return (style.FONT, FONT_SIZES.get(size_name, 13))
+
+def get_quick_messages(settings_dict):
+    """Returns the saved quick messages as a Python list."""
+    try:
+        items = json.loads(settings_dict.get("quick_messages") or "[]")
+        return [str(i) for i in items]
+    except (ValueError, TypeError):
+        return list(DEFAULT_QUICK_MESSAGES)
 
 def open_settings(user_email="", main_window=None, discovery=None, on_save=None):
     data = load_settings(user_email)
@@ -103,7 +141,7 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     notebook = ttk.Notebook(win)
     notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
     tabs = {}
-    for name in ("General", "User Information", "Messaging", "Sound Events",
+    for name in ("General", "Messaging", "Sound Events",
                  "Network", "File Transfer", "Logging", "Hot Keys"):
         tabs[name] = tk.Frame(notebook, bg=style.BG)
         notebook.add(tabs[name], text=name)
@@ -112,13 +150,28 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
         tk.Label(tab, text=title, font=(style.FONT, 16, "bold"), bg=style.BG,
                  fg=style.WHITE).pack(anchor="w", padx=22, pady=(10, 6))
 
+    def section(tab, title):
+        tk.Label(tab, text=title, bg=style.BG, fg=style.WHITE,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+        tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
+
     vars_ = {}
-    def check(tab, label, key):
+    def check(tab, label, key, padx=28, pady=2):
         vars_[key] = tk.BooleanVar(value=bool(data[key]))
-        tk.Checkbutton(tab, text=label, variable=vars_[key], bg=style.BG,
-                       fg=style.WHITE, selectcolor=style.INPUT_BG,
-                       activebackground=style.BG, activeforeground=style.WHITE,
-                       highlightthickness=0).pack(anchor="w", padx=28, pady=2)
+        cb = tk.Checkbutton(tab, text=label, variable=vars_[key], bg=style.BG,
+                            fg=style.WHITE, selectcolor=style.INPUT_BG,
+                            activebackground=style.BG, activeforeground=style.WHITE,
+                            disabledforeground="#888888", highlightthickness=0)
+        cb.pack(anchor="w", padx=padx, pady=pady)
+        return cb
+
+    def radio(tab, label, var, value, padx=28, command=None):
+        rb = tk.Radiobutton(tab, text=label, variable=var, value=value,
+                            command=command, bg=style.BG, fg=style.WHITE,
+                            selectcolor=style.INPUT_BG, activebackground=style.BG,
+                            activeforeground=style.WHITE, highlightthickness=0)
+        rb.pack(anchor="w", padx=padx, pady=2)
+        return rb
 
     # General options matching the supplied screenshot
     tab = tabs["General"]
@@ -155,19 +208,146 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     ttk.Combobox(row2, textvariable=language, values=["English"],
                  state="readonly", width=17).pack(side="left")
 
-    # User information
-    tab = tabs["User Information"]; heading(tab, "User Information")
-    tk.Label(tab, text="Display Name", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
-    display = style.make_entry(tab); display.insert(0, data["display_name"])
-    display.pack(anchor="w", padx=25, pady=7, ipady=3)
-    tk.Label(tab, text="Department", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
-    dept = ttk.Combobox(tab, values=["CS", "EC", "Mechanical", "Administration", "IT", "R&D"],
-                        state="readonly", width=24); dept.set(data["department"])
-    dept.pack(anchor="w", padx=25, pady=7)
+    # ------------------------------------------------------------------
+    # Messaging tab  ->  "Message Window" screen
+    # ------------------------------------------------------------------
+    tab = tabs["Messaging"]
+    heading(tab, "Message Window")
+    section(tab, "Message Window")
 
-    # Messaging, sound and logging
+    message_mode = tk.StringVar(value=data["message_mode"])
+    incoming = tk.StringVar(value=data["incoming_behavior"])
+    font_size = tk.StringVar(value=data["font_size"])
+
+    def refresh_message_options():
+        conv = message_mode.get() == "conversation"
+        recent_cb.config(state="normal" if conv else "disabled")
+        nodate_cb.config(state="normal" if conv else "disabled")
+        fore = incoming.get() == "foreground"
+        keep_cb.config(state="normal" if fore else "disabled")
+
+    radio(tab, "Single message mode", message_mode, "single",
+          command=lambda: refresh_message_options())
+    radio(tab, "Conversation mode", message_mode, "conversation",
+          command=lambda: refresh_message_options())
+    recent_cb = check(tab, "Display recent messages", "display_recent_messages", padx=55)
+    nodate_cb = check(tab, "Do not show date in time stamp", "hide_date_in_timestamp", padx=55)
+
+    tk.Frame(tab, bg=style.BG, height=6).pack()
+    radio(tab, "Minimize incoming messages to taskbar", incoming, "taskbar",
+          command=lambda: refresh_message_options())
+    radio(tab, "Set incoming messages foreground", incoming, "foreground",
+          command=lambda: refresh_message_options())
+    keep_cb = check(tab, "Keep keyboard focus in message window", "keep_focus", padx=55)
+
+    tk.Frame(tab, bg=style.BG, height=6).pack()
+    check(tab, "Enable spell checking", "spell_check")
+    check(tab, "Press Enter to send messages", "enter_to_send")
+
+    # ----- Quick Messages (link opens a small editor) -----
+    quick_list = get_quick_messages(data)
+
+    def open_quick_messages():
+        dlg = tk.Toplevel(win)
+        dlg.title("Quick Messages")
+        dlg.configure(bg=style.BG)
+        dlg.transient(win)
+        style.center_window(dlg, 430, 400)
+        dlg.resizable(False, False)
+
+        tk.Label(dlg, text="Quick Messages", font=(style.FONT, 14, "bold"),
+                 bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=15, pady=(12, 4))
+        tk.Label(dlg, text="Ready-made replies you can send with one click.",
+                 bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=15)
+
+        lb = tk.Listbox(dlg, height=10, bg=style.INPUT_BG, fg=style.WHITE,
+                        highlightthickness=1, highlightbackground=style.BORDER,
+                        selectbackground="#2f6fed", selectforeground="white",
+                        activestyle="none", exportselection=False)
+        lb.pack(fill="both", expand=True, padx=15, pady=8)
+        for item in quick_list:
+            lb.insert("end", item)
+
+        text_var = tk.StringVar()
+        entry = style.make_entry(dlg, textvariable=text_var)
+        entry.pack(fill="x", padx=15, ipady=3)
+
+        def on_select(_=None):
+            sel = lb.curselection()
+            if sel:
+                text_var.set(lb.get(sel[0]))
+        lb.bind("<<ListboxSelect>>", on_select)
+
+        def add():
+            t = text_var.get().strip()
+            if t:
+                lb.insert("end", t)
+                text_var.set("")
+
+        def update():
+            sel = lb.curselection()
+            t = text_var.get().strip()
+            if sel and t:
+                lb.delete(sel[0])
+                lb.insert(sel[0], t)
+                lb.selection_set(sel[0])
+
+        def delete():
+            sel = lb.curselection()
+            if sel:
+                lb.delete(sel[0])
+                text_var.set("")
+
+        def done():
+            quick_list[:] = list(lb.get(0, "end"))
+            dlg.destroy()
+
+        btns = tk.Frame(dlg, bg=style.BG)
+        btns.pack(fill="x", padx=15, pady=10)
+        style.make_button(btns, "Add", add, kind="secondary", width=8).pack(side="left", padx=(0, 5))
+        style.make_button(btns, "Update", update, kind="secondary", width=8).pack(side="left", padx=5)
+        style.make_button(btns, "Delete", delete, kind="secondary", width=8).pack(side="left", padx=5)
+        style.make_button(btns, "OK", done, kind="primary", width=8).pack(side="right")
+        dlg.grab_set()
+
+    link = tk.Label(tab, text="Quick Messages Settings...", bg=style.BG, fg="#4da3ff",
+                    cursor="hand2", font=("Segoe UI", 9, "underline"))
+    link.pack(anchor="e", padx=40, pady=(2, 0))
+    link.bind("<Button-1>", lambda e: open_quick_messages())
+
+    # ----- Font size + live preview -----
+    section(tab, "Font Size")
+    fs = tk.Frame(tab, bg=style.BG)
+    fs.pack(fill="x", padx=28, pady=2)
+    left = tk.Frame(fs, bg=style.BG)
+    left.pack(side="left", anchor="n")
+
+    preview_holder = tk.Frame(fs, bg=style.INPUT_BG, highlightthickness=1,
+                              highlightbackground=style.BORDER, width=190, height=80)
+    preview = tk.Label(preview_holder, text="Text Sample", bg=style.INPUT_BG,
+                       fg=style.WHITE, font=message_font(font_size.get()))
+
+    def update_preview():
+        preview.config(font=message_font(font_size.get()))
+
+    for label, value in (("Normal", "Normal"), ("Large", "Large"),
+                         ("Extra large", "Extra large")):
+        rb = tk.Radiobutton(left, text=label, variable=font_size, value=value,
+                            command=update_preview, bg=style.BG, fg=style.WHITE,
+                            selectcolor=style.INPUT_BG, activebackground=style.BG,
+                            activeforeground=style.WHITE, highlightthickness=0)
+        rb.pack(anchor="w", pady=2)
+
+    tk.Label(fs, text="Preview:", bg=style.BG, fg=style.WHITE).pack(
+        side="left", anchor="n", padx=(40, 8))
+    preview_holder.pack(side="left", anchor="n")
+    preview_holder.pack_propagate(False)
+    preview.pack(expand=True)
+
+    refresh_message_options()
+
+    # Sound and logging
     for tab_name, key, label in [
-        ("Messaging", "enter_to_send", "Press Enter to send messages"),
         ("Sound Events", "sound_enabled", "Enable sound events"),
         ("Logging", "logging_enabled", "Enable application logging")
     ]:
@@ -209,8 +389,11 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
         new = {k: int(v.get()) for k, v in vars_.items()}
         new["inactive_minutes"] = int(minutes)
         new.update(theme=theme.get(), language=language.get(),
-                   display_name=display.get().strip(), department=dept.get().strip(),
-                   listening_port=p, download_folder=folder.get().strip())
+                   listening_port=p, download_folder=folder.get().strip(),
+                   message_mode=message_mode.get(),
+                   incoming_behavior=incoming.get(),
+                   font_size=font_size.get(),
+                   quick_messages=json.dumps(quick_list))
         try:
             save_settings(user_email, new)
         except Exception as exc:

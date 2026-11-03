@@ -1,11 +1,13 @@
-
 import atexit
 import json
+import os
+import re
 import socket
 import sqlite3
 import threading
 import time
 import tkinter as tk
+from datetime import datetime, timezone
 from tkinter import messagebox
 
 import pystray
@@ -15,8 +17,18 @@ from discovery import CHAT_PORT, LANDiscovery
 import style
 import settings
 
+# Optional spell checker:  pip install pyspellchecker
+try:
+    from spellchecker import SpellChecker
+    _SPELL = SpellChecker()
+except Exception:
+    _SPELL = None
 
 DB_NAME = style.data_path("lan_connect_project.db")
+
+PORT_TRIES = 10            # ports CHAT_PORT .. CHAT_PORT+9 are tried (several apps on one PC)
+RECENT_LIMIT = 30          # how many old messages "Display recent messages" shows
+WORD_RE = re.compile(r"[A-Za-z']+")
 
 
 def create_chat_table():
@@ -107,19 +119,39 @@ class MessageService:
         self.server = None
 
     def start(self):
-        try:
-            self.server = socket.socket(
-                socket.AF_INET,
-                socket.SOCK_STREAM
-            )
-            self.server.setsockopt(
-                socket.SOL_SOCKET,
-                socket.SO_REUSEADDR,
-                1
-            )
-            self.server.bind(("", CHAT_PORT))
-            self.server.listen(10)
-            self.server.settimeout(1)
+        # Several copies of the app can run on one PC (testing), so we try
+        # CHAT_PORT, CHAT_PORT+1, ... and keep the first free one.
+        for offset in range(PORT_TRIES):
+            port = CHAT_PORT + offset
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            try:
+                # On Windows SO_REUSEADDR lets TWO programs share one port,
+                # and messages then go to the wrong one. Use an exclusive bind.
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    sock.setsockopt(
+                        socket.SOL_SOCKET,
+                        socket.SO_EXCLUSIVEADDRUSE,
+                        1
+                    )
+                else:
+                    sock.setsockopt(
+                        socket.SOL_SOCKET,
+                        socket.SO_REUSEADDR,
+                        1
+                    )
+
+                sock.bind(("", port))
+                sock.listen(10)
+                sock.settimeout(1)
+
+            except OSError as e:
+                sock.close()
+                print(f"[CHAT] Port {port} is busy: {e}")
+                continue
+
+            self.server = sock
+            self.port = port
             self.running = True
 
             threading.Thread(
@@ -129,18 +161,12 @@ class MessageService:
 
             print(
                 f"[CHAT] Server started for {self.username} "
-                f"on port {CHAT_PORT}"
+                f"on port {port}"
             )
             return True
 
-        except OSError as e:
-            print("[CHAT] Server could not start:", e)
-
-            if self.server:
-                self.server.close()
-                self.server = None
-
-            return False
+        print("[CHAT] Server could not start on any port.")
+        return False
 
     def _accept_loop(self):
         while self.running:
@@ -160,6 +186,8 @@ class MessageService:
                 break
 
     def _handle(self, conn):
+        accepted = False
+
         try:
             conn.settimeout(5)
             data = b""
@@ -185,6 +213,8 @@ class MessageService:
                 return
 
             if msg.get("to") != self.username:
+                # Message is for another copy of the app on this PC.
+                # We answer "NO" (in finally) so the sender tries the next port.
                 print("[CHAT] Message receiver does not match.")
                 return
 
@@ -192,6 +222,13 @@ class MessageService:
             message = str(msg.get("text", ""))
 
             if sender and message.strip():
+                accepted = True
+
+                try:
+                    conn.sendall(b"OK\n")
+                except OSError:
+                    pass
+
                 print(
                     f"[CHAT] Message received from {sender}: {message}"
                 )
@@ -206,10 +243,36 @@ class MessageService:
             print("[CHAT] Receive error:", e)
 
         finally:
+            if not accepted:
+                try:
+                    conn.sendall(b"NO\n")
+                except OSError:
+                    pass
+
             try:
                 conn.close()
             except OSError:
                 pass
+
+    def _try_send(self, ip, port, payload):
+        """Returns 'ok', 'rejected' (someone else owns that port),
+        'refused' (nobody listening) or 'error'."""
+        try:
+            with socket.create_connection(
+                (ip, port),
+                timeout=2
+            ) as sock:
+                sock.sendall(payload)
+                sock.settimeout(3)
+                reply = sock.recv(16).strip()
+
+            return "ok" if reply == b"OK" else "rejected"
+
+        except ConnectionRefusedError:
+            return "refused"
+        except OSError as e:
+            print(f"[CHAT] Send error to {ip}:{port}: {e}")
+            return "error"
 
     def send(self, receiver, message):
         peer = self.find_peer(receiver)
@@ -227,23 +290,24 @@ class MessageService:
             "text": message,
         }).encode("utf-8") + b"\n"
 
-        try:
-            with socket.create_connection(
-                (ip, port),
-                timeout=5
-            ) as sock:
-                sock.sendall(payload)
+        # Try the advertised port first, then the other ports of the range
+        ports = [port] + [
+            p for p in range(CHAT_PORT, CHAT_PORT + PORT_TRIES)
+            if p != port
+        ]
 
-            print(
-                f"[CHAT] Message sent to {receiver} at {ip}:{port}"
-            )
-            return True
+        for p in ports:
+            result = self._try_send(ip, p, payload)
 
-        except OSError as e:
-            print(
-                f"[CHAT] Could not send message to {receiver}: {e}"
-            )
-            return False
+            if result == "ok":
+                print(f"[CHAT] Message sent to {receiver} at {ip}:{p}")
+                return True
+
+            if result == "error":
+                break
+
+        print(f"[CHAT] Could not send message to {receiver}")
+        return False
 
     def stop(self):
         self.running = False
@@ -322,6 +386,22 @@ def home_page(user_email):
         "hide_away_users": bool(
             user_settings.get("hide_away_users", 0)
         ),
+        # ---- Messaging tab settings ----
+        "message_mode": user_settings.get("message_mode", "conversation"),
+        "display_recent_messages": bool(
+            user_settings.get("display_recent_messages", 1)
+        ),
+        "hide_date_in_timestamp": bool(
+            user_settings.get("hide_date_in_timestamp", 1)
+        ),
+        "incoming_behavior": user_settings.get(
+            "incoming_behavior", "foreground"
+        ),
+        "keep_focus": bool(user_settings.get("keep_focus", 0)),
+        "spell_check": bool(user_settings.get("spell_check", 1)),
+        "font_size": user_settings.get("font_size", "Large"),
+        "enter_to_send": bool(user_settings.get("enter_to_send", 1)),
+        "quick_messages": settings.get_quick_messages(user_settings),
     }
 
     style.set_theme(state["theme_mode"])
@@ -359,6 +439,16 @@ def home_page(user_email):
 
     print("[HOME] Logged in user:", local_username)
 
+    # Diagnostic: shows exactly which database file the app is reading
+    try:
+        _c = sqlite3.connect(DB_NAME, timeout=30)
+        _n = _c.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        _c.close()
+        print(f"[DATABASE] File in use: {os.path.abspath(DB_NAME)}")
+        print(f"[DATABASE] Messages stored in it: {_n}")
+    except sqlite3.Error as e:
+        print("[DATABASE] Diagnostic error:", e)
+
     try:
         registered_usernames = get_registered_usernames()
     except sqlite3.Error as e:
@@ -371,6 +461,7 @@ def home_page(user_email):
     ]
 
     known_users = {}
+    unread = {}          # username -> number of unread messages
 
     active_chat = {
         "username": None,
@@ -410,7 +501,7 @@ def home_page(user_email):
         bg=style.CARD,
         width=220
     )
-    users_frame.pack(side="left", fill="y")
+    users_frame.pack(side="left", fill="y", before=content_frame)
     users_frame.pack_propagate(False)
 
     tk.Label(
@@ -433,8 +524,99 @@ def home_page(user_email):
         "Offline": style.STATUS_OFFLINE,
     }
 
+    # ------------------------------------------------------------------
+    # Messaging-settings helpers
+    # ------------------------------------------------------------------
+    def font_px():
+        return settings.FONT_SIZES.get(state["font_size"], 13)
+
+    def format_timestamp(ts=None):
+        """Time stamp text. Respects 'Do not show date in time stamp'."""
+        fmt = "%I:%M %p" if state["hide_date_in_timestamp"] \
+            else "%d-%m-%Y %I:%M %p"
+        if ts is None:
+            dt = datetime.now()
+        else:
+            try:
+                # SQLite CURRENT_TIMESTAMP is stored in UTC
+                dt = datetime.strptime(
+                    str(ts)[:19], "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=timezone.utc).astimezone()
+            except ValueError:
+                dt = datetime.now()
+        return dt.strftime(fmt)
+
+    def apply_chat_fonts():
+        """Applies the chosen Font Size to the open chat (live)."""
+        size = font_px()
+        try:
+            conv = active_chat["conversation"]
+            if conv is not None and conv.winfo_exists():
+                conv.config(font=(style.FONT, size))
+                conv.tag_config("name", font=(style.FONT, size, "bold"),
+                                foreground=style.WHITE)
+                conv.tag_config("name_me", font=(style.FONT, size, "bold"),
+                                foreground=style.ACCENT)
+                conv.tag_config("meta", font=(style.FONT, max(size - 3, 8)),
+                                foreground=style.MUTED)
+            box = active_chat["input"]
+            if box is not None and box.winfo_exists():
+                box.config(font=(style.FONT, size))
+        except tk.TclError:
+            pass
+
+    def append_message(sender, message, ts=None):
+        conv = active_chat["conversation"]
+        try:
+            if conv is None or not conv.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        is_me = sender == local_username
+        conv.config(state="normal")
+        conv.insert("end", "You" if is_me else sender,
+                    "name_me" if is_me else "name")
+        conv.insert("end", f"  {format_timestamp(ts)}\n", "meta")
+        conv.insert("end", f"{message}\n\n")
+        conv.config(state="disabled")
+        conv.see("end")
+
+    def check_spelling(event=None):
+        """Red underline for misspelled words (needs pyspellchecker)."""
+        box = active_chat["input"]
+        try:
+            if box is None or not box.winfo_exists():
+                return
+            box.tag_remove("misspelled", "1.0", "end")
+            if not state["spell_check"] or _SPELL is None:
+                return
+            text = box.get("1.0", "end-1c")
+            for m in WORD_RE.finditer(text):
+                if m.end() == len(text):      # word still being typed
+                    continue
+                word = m.group().strip("'").lower()
+                if len(word) > 2 and word in _SPELL.unknown([word]):
+                    box.tag_add("misspelled",
+                                f"1.0+{m.start()}c", f"1.0+{m.end()}c")
+        except tk.TclError:
+            pass
+
+    def bring_to_front():
+        try:
+            if win.state() == "withdrawn":
+                stop_tray()
+            win.deiconify()
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(300, lambda: win.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+
     def open_user_chat(peer_username):
         active_chat["username"] = peer_username
+        new_unread = unread.pop(peer_username, 0)
+        render_users()
 
         for widget in content_frame.winfo_children():
             widget.destroy()
@@ -454,7 +636,9 @@ def home_page(user_email):
             content_frame,
             bg=style.BG,
             fg=style.WHITE,
-            font=("Segoe UI", 10),
+            font=(style.FONT, font_px()),
+            width=1,
+            height=1,
             wrap="word",
             state="disabled",
             relief="flat",
@@ -469,38 +653,34 @@ def home_page(user_email):
 
         active_chat["conversation"] = conversation
 
-        try:
-            messages = get_chat_history(
-                local_username,
-                peer_username
-            )
+        # Which old messages to show?
+        #  - Single message mode: none (each message has its own window)
+        #  - Conversation + "Display recent messages": last RECENT_LIMIT
+        #  - Conversation without it: only the new unread ones
+        if state["message_mode"] == "single":
+            limit = 0
+        elif state["display_recent_messages"]:
+            limit = RECENT_LIMIT
+        else:
+            limit = new_unread
 
-            conversation.config(state="normal")
-
-            for sender, message, timestamp in messages:
-                display_name = (
-                    "You"
-                    if sender == local_username
-                    else sender
-                )
-
-                conversation.insert(
-                    "end",
-                    f"{display_name}: {message}\n\n"
-                )
-
-            conversation.config(state="disabled")
-            conversation.see("end")
-
-        except sqlite3.Error as e:
-            print("[DATABASE] History error:", e)
+        if limit > 0:
+            try:
+                history = get_chat_history(local_username, peer_username)
+                apply_chat_fonts()
+                for sender, message, timestamp in history[-limit:]:
+                    append_message(sender, message, timestamp)
+            except sqlite3.Error as e:
+                print("[DATABASE] History error:", e)
 
         bottom_frame = tk.Frame(content_frame, bg=style.CARD)
-        bottom_frame.pack(fill="x", padx=10, pady=10)
+        bottom_frame.pack(side="bottom", fill="x", padx=10, pady=10,
+                          before=conversation)
 
         message_input = tk.Text(
             bottom_frame,
-            font=("Segoe UI", 11),
+            font=(style.FONT, font_px()),
+            width=1,
             height=3,
             wrap="word",
             bg=style.INPUT_BG,
@@ -515,36 +695,16 @@ def home_page(user_email):
             padx=8,
             pady=8
         )
+        message_input.tag_config("misspelled", foreground="#d32f2f",
+                                 underline=True)
 
         active_chat["input"] = message_input
+        apply_chat_fonts()
 
-        def display_message(sender, message):
-            current_chat = active_chat["conversation"]
-
-            if current_chat is None:
-                return
-
-            if not current_chat.winfo_exists():
-                return
-
-            display_name = (
-                "You"
-                if sender == local_username
-                else sender
-            )
-
-            current_chat.config(state="normal")
-            current_chat.insert(
-                "end",
-                f"{display_name}: {message}\n\n"
-            )
-            current_chat.config(state="disabled")
-            current_chat.see("end")
-
-        def send_message():
-            message = message_input.get(
-                "1.0",
-                "end-1c"
+        def send_message(text=None):
+            from_box = text is None
+            message = (
+                message_input.get("1.0", "end-1c") if from_box else text
             ).strip()
 
             if not message:
@@ -592,8 +752,11 @@ def home_page(user_email):
                 )
                 return
 
-            display_message(local_username, message)
-            message_input.delete("1.0", "end")
+            append_message(local_username, message)
+
+            if from_box:
+                message_input.delete("1.0", "end")
+                check_spelling()
 
         style.make_button(
             bottom_frame,
@@ -602,11 +765,53 @@ def home_page(user_email):
             kind="primary"
         ).pack(side="right", padx=8, pady=8)
 
+        # ---- Quick Messages (one click = send) ----
+        quick_btn = tk.Menubutton(
+            bottom_frame,
+            text="⚡ Quick",
+            font=("Segoe UI", 10, "bold"),
+            bg=style.CARD,
+            fg=style.WHITE,
+            activebackground=style.CARD,
+            activeforeground=style.ACCENT,
+            relief="flat",
+            cursor="hand2"
+        )
+
+        def fill_quick_menu():
+            quick_menu.delete(0, "end")
+            items = state["quick_messages"]
+            if not items:
+                quick_menu.add_command(label="(no quick messages)",
+                                       state="disabled")
+            for item in items:
+                quick_menu.add_command(
+                    label=item,
+                    command=lambda t=item: send_message(t)
+                )
+
+        quick_menu = tk.Menu(quick_btn, tearoff=0, postcommand=fill_quick_menu)
+        quick_btn.config(menu=quick_menu)
+        quick_btn.pack(side="right", padx=4)
+
+        # ---- Enter key behaviour ("Press Enter to send messages") ----
         def handle_enter(event):
-            send_message()
-            return "break"
+            shift = bool(event.state & 0x1)
+            ctrl = bool(event.state & 0x4)
+
+            if state["enter_to_send"]:
+                if shift:
+                    return None          # Shift+Enter = new line
+                send_message()
+                return "break"
+
+            if ctrl:                     # Enter off: Ctrl+Enter sends
+                send_message()
+                return "break"
+            return None                  # plain Enter = new line
 
         message_input.bind("<Return>", handle_enter)
+        message_input.bind("<KeyRelease>", check_spelling)
         message_input.focus_set()
 
     def find_peer(username):
@@ -625,6 +830,69 @@ def home_page(user_email):
 
         return None
 
+    # ------------------------------------------------------------------
+    # Incoming messages
+    # ------------------------------------------------------------------
+    def show_single_popup(sender, message):
+        """Single message mode: every message gets its own small window."""
+        pop = tk.Toplevel(win)
+        pop.title(f"Message from {sender}")
+        pop.configure(bg=style.BG)
+        style.center_window(pop, 400, 240)
+
+        tk.Label(pop, text=sender, font=("Segoe UI", 12, "bold"),
+                 bg=style.BG, fg=style.ACCENT).pack(anchor="w", padx=15, pady=(12, 0))
+        tk.Label(pop, text=format_timestamp(), bg=style.BG,
+                 fg=style.MUTED).pack(anchor="w", padx=15)
+        tk.Label(pop, text=message, wraplength=360, justify="left",
+                 font=(style.FONT, font_px()), bg=style.BG,
+                 fg=style.WHITE).pack(anchor="w", padx=15, pady=10)
+
+        def reply():
+            pop.destroy()
+            bring_to_front()
+            open_user_chat(sender)
+
+        btns = tk.Frame(pop, bg=style.BG)
+        btns.pack(side="bottom", fill="x", padx=15, pady=12)
+        style.make_button(btns, "Reply", reply, kind="primary", width=10
+                          ).pack(side="right", padx=5)
+        style.make_button(btns, "Close", pop.destroy, kind="secondary",
+                          width=10).pack(side="right", padx=5)
+
+        # "Minimize incoming messages to taskbar" / "foreground"
+        if state["incoming_behavior"] == "taskbar":
+            pop.iconify()
+        else:
+            pop.lift()
+            pop.attributes("-topmost", True)
+            pop.after(300, lambda: pop.attributes("-topmost", False))
+            if state["keep_focus"]:
+                pop.focus_force()
+
+    def notify_incoming(sender):
+        """Conversation mode: foreground / taskbar behaviour."""
+        if state["incoming_behavior"] == "foreground":
+            bring_to_front()
+
+            if active_chat["username"] is None:
+                open_user_chat(sender)
+
+            if state["keep_focus"]:
+                win.focus_force()
+                box = active_chat["input"]
+                if box is not None and active_chat["username"] == sender:
+                    box.focus_set()
+        else:
+            # Taskbar: do not steal the screen. If the app is hidden in the
+            # tray, show it minimized in the taskbar instead.
+            try:
+                if win.state() == "withdrawn":
+                    stop_tray()
+                    win.iconify()
+            except tk.TclError:
+                pass
+
     def on_incoming_message(sender, message):
         print(
             f"[HOME] Incoming message from {sender}: {message}"
@@ -640,28 +908,28 @@ def home_page(user_email):
             print("[DATABASE] Incoming save error:", e)
             return
 
-        def update_chat():
+        def handle():
             try:
                 if not win.winfo_exists():
                     return
 
-                if active_chat["username"] == sender:
-                    conversation = active_chat["conversation"]
+                if state["message_mode"] == "single":
+                    show_single_popup(sender, message)
+                    return
 
-                    if conversation and conversation.winfo_exists():
-                        conversation.config(state="normal")
-                        conversation.insert(
-                            "end",
-                            f"{sender}: {message}\n\n"
-                        )
-                        conversation.config(state="disabled")
-                        conversation.see("end")
+                if active_chat["username"] == sender:
+                    append_message(sender, message)
+                else:
+                    unread[sender] = unread.get(sender, 0) + 1
+                    render_users()
+
+                notify_incoming(sender)
 
             except tk.TclError as e:
                 print("[UI] Incoming message UI error:", e)
 
         try:
-            win.after(0, update_chat)
+            win.after(0, handle)
         except tk.TclError:
             pass
 
@@ -711,6 +979,7 @@ def home_page(user_email):
         for user in sorted_users:
             username = user["username"]
             status = user.get("status", "Offline")
+            count = unread.get(username, 0)
 
             row = tk.Frame(online_users_frame, bg=style.CARD)
             row.pack(fill="x", padx=10, pady=5)
@@ -728,10 +997,10 @@ def home_page(user_email):
 
             name_label = tk.Label(
                 row,
-                text=username,
-                font=("Segoe UI", 10),
+                text=f"{username}  ({count})" if count else username,
+                font=("Segoe UI", 10, "bold" if count else "normal"),
                 bg=style.CARD,
-                fg=style.WHITE,
+                fg=style.ACCENT if count else style.WHITE,
                 cursor="hand2",
                 anchor="w"
             )
@@ -872,9 +1141,27 @@ def home_page(user_email):
                     "hide_away_users",
                     state["hide_away_users"]
                 )
-            )
+            ),
+            # ---- Messaging tab ----
+            message_mode=new.get("message_mode", state["message_mode"]),
+            display_recent_messages=bool(
+                new.get("display_recent_messages", 1)
+            ),
+            hide_date_in_timestamp=bool(
+                new.get("hide_date_in_timestamp", 1)
+            ),
+            incoming_behavior=new.get(
+                "incoming_behavior", state["incoming_behavior"]
+            ),
+            keep_focus=bool(new.get("keep_focus", 0)),
+            spell_check=bool(new.get("spell_check", 1)),
+            font_size=new.get("font_size", state["font_size"]),
+            enter_to_send=bool(new.get("enter_to_send", 1)),
+            quick_messages=settings.get_quick_messages(new),
         )
 
+        apply_chat_fonts()      # font size changes live in the open chat
+        check_spelling()        # spell checking on/off live
         render_users()
 
     def open_settings_window():
@@ -1051,4 +1338,4 @@ def home_page(user_email):
 
 
 if __name__ == "__main__":
-    home_page()
+    home_page("")   # normally called from login with the user's email
