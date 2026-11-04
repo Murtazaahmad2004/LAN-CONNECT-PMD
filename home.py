@@ -7,8 +7,9 @@ import sqlite3
 import threading
 import time
 import tkinter as tk
+import uuid
 from datetime import datetime, timezone
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 import pystray
 from PIL import Image, ImageDraw
@@ -23,6 +24,11 @@ try:
     _SPELL = SpellChecker()
 except Exception:
     _SPELL = None
+
+try:
+    import winsound          # Windows system sounds (other systems: bell)
+except ImportError:
+    winsound = None
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
@@ -43,20 +49,30 @@ def create_chat_table():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Unique id per message: the same message is never stored twice
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
+        if "msg_uid" not in columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN msg_uid TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uid "
+            "ON messages(msg_uid)"
+        )
         conn.commit()
     finally:
         conn.close()
 
 
-def save_message(sender, receiver, message):
+def save_message(sender, receiver, message, uid=None):
+    """Stores a message permanently (messages are never deleted)."""
     conn = sqlite3.connect(DB_NAME, timeout=30)
     try:
         conn.execute(
             """
-            INSERT INTO messages (sender, receiver, message)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO messages (sender, receiver, message, msg_uid)
+            VALUES (?, ?, ?, ?)
             """,
-            (sender, receiver, message),
+            (sender, receiver, message, uid),
         )
         conn.commit()
     finally:
@@ -220,6 +236,7 @@ class MessageService:
 
             sender = str(msg.get("from", "")).strip()
             message = str(msg.get("text", ""))
+            uid = str(msg.get("id", "")).strip() or None
 
             if sender and message.strip():
                 accepted = True
@@ -232,7 +249,7 @@ class MessageService:
                 print(
                     f"[CHAT] Message received from {sender}: {message}"
                 )
-                self.on_message(sender, message)
+                self.on_message(sender, message, uid)
 
         except (
             OSError,
@@ -283,8 +300,11 @@ class MessageService:
 
         ip, port = peer
 
+        uid = uuid.uuid4().hex
+
         payload = json.dumps({
             "type": "chat",
+            "id": uid,
             "from": self.username,
             "to": receiver,
             "text": message,
@@ -301,7 +321,7 @@ class MessageService:
 
             if result == "ok":
                 print(f"[CHAT] Message sent to {receiver} at {ip}:{p}")
-                return True
+                return uid
 
             if result == "error":
                 break
@@ -368,6 +388,167 @@ def open_about():
     open_screen("About")
 
 
+class ChatView(tk.Frame):
+    """Scrollable conversation area with chat bubbles.
+
+    My messages: right side, accent coloured bubble.
+    Other person's messages: left side, card coloured bubble.
+    Right-click a bubble to copy its text.
+    """
+
+    def __init__(self, parent, font_size=13):
+        super().__init__(parent, bg=style.BG)
+        self.font_size = font_size
+        self._width = 600
+        self._bubbles = []          # (text_label, time_label)
+        self._copy_text = ""
+
+        self.canvas = tk.Canvas(self, bg=style.BG, highlightthickness=0, bd=0)
+        self.scroll = ttk.Scrollbar(self, orient="vertical",
+                                    command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.scroll.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.inner = tk.Frame(self.canvas, bg=style.BG)
+        self._window = self.canvas.create_window(
+            (0, 0), window=self.inner, anchor="nw"
+        )
+
+        self.inner.bind("<Configure>", self._on_inner_resize)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+
+        self.menu = tk.Menu(self, tearoff=0)
+        self.menu.add_command(label="Copy", command=self._copy)
+
+        self.bind_all("<MouseWheel>", self._on_wheel)
+        self.bind_all("<Button-4>", self._on_wheel)
+        self.bind_all("<Button-5>", self._on_wheel)
+
+    # ---- layout helpers
+    def _wrap(self):
+        return max(220, int(self._width * 0.62))
+
+    def _on_inner_resize(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_resize(self, event):
+        self._width = event.width
+        self.canvas.itemconfigure(self._window, width=event.width)
+
+        wrap = self._wrap()
+        for text_label, _time_label in self._bubbles:
+            try:
+                text_label.config(wraplength=wrap)
+            except tk.TclError:
+                pass
+
+    def _on_wheel(self, event):
+        try:
+            if not self.winfo_exists():
+                return
+            widget = self.winfo_containing(event.x_root, event.y_root)
+        except (tk.TclError, KeyError):
+            return
+
+        while widget is not None and widget is not self:
+            widget = widget.master
+        if widget is None:
+            return
+
+        if event.num == 4:
+            step = -1
+        elif event.num == 5:
+            step = 1
+        else:
+            step = -1 if event.delta > 0 else 1
+
+        if self.inner.winfo_height() > self.canvas.winfo_height():
+            self.canvas.yview_scroll(step * 2, "units")
+
+    def _copy(self):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self._copy_text)
+        except tk.TclError:
+            pass
+
+    def _popup_menu(self, event, text):
+        self._copy_text = text
+        try:
+            self.menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.menu.grab_release()
+
+    def scroll_to_end(self):
+        self.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(1.0)
+
+    # ---- public API
+    def set_font(self, size):
+        self.font_size = size
+        for text_label, time_label in self._bubbles:
+            try:
+                text_label.config(font=(style.FONT, size))
+                time_label.config(font=(style.FONT, max(size - 4, 8)))
+            except tk.TclError:
+                pass
+
+    def add_message(self, text, time_text, is_me):
+        row = tk.Frame(self.inner, bg=style.BG)
+        row.pack(fill="x", pady=(0, 10))
+
+        if is_me:
+            bubble_bg, text_fg, time_fg = style.ACCENT, style.ON_ACCENT, style.ON_ACCENT
+            border = style.ACCENT
+            side, pad = "right", (70, 16)
+        else:
+            bubble_bg, text_fg, time_fg = style.CARD, style.TEXT, style.MUTED
+            border = style.BORDER
+            side, pad = "left", (16, 70)
+
+        bubble = tk.Frame(
+            row,
+            bg=bubble_bg,
+            highlightthickness=1,
+            highlightbackground=border,
+            padx=14,
+            pady=8,
+        )
+        bubble.pack(side=side, padx=pad)
+
+        text_label = tk.Label(
+            bubble,
+            text=text,
+            bg=bubble_bg,
+            fg=text_fg,
+            font=(style.FONT, self.font_size),
+            justify="left",
+            anchor="w",
+            wraplength=self._wrap(),
+        )
+        text_label.pack(anchor="w")
+
+        time_label = tk.Label(
+            bubble,
+            text=time_text,
+            bg=bubble_bg,
+            fg=time_fg,
+            font=(style.FONT, max(self.font_size - 4, 8)),
+        )
+        time_label.pack(anchor="e", pady=(4, 0))
+
+        for widget in (bubble, text_label, time_label):
+            widget.bind(
+                "<Button-3>",
+                lambda e, t=text: self._popup_menu(e, t),
+            )
+
+        self._bubbles.append((text_label, time_label))
+        self.after_idle(self.scroll_to_end)
+
+
 def home_page(user_email):
 
     user_settings = settings.load_settings(user_email)
@@ -402,6 +583,23 @@ def home_page(user_email):
         "font_size": user_settings.get("font_size", "Large"),
         "enter_to_send": bool(user_settings.get("enter_to_send", 1)),
         "quick_messages": settings.get_quick_messages(user_settings),
+        # ---- Sound Events tab ----
+        "sound_enabled": bool(user_settings.get("sound_enabled", 1)),
+        "sound_incoming_message": bool(
+            user_settings.get("sound_incoming_message", 1)
+        ),
+        "sound_broadcast": bool(user_settings.get("sound_broadcast", 1)),
+        "sound_when": user_settings.get("sound_when", "background"),
+        "sound_tune": user_settings.get("sound_tune", "Classic Bell"),
+        "repeat_sound": bool(user_settings.get("repeat_sound", 0)),
+        "repeat_seconds": int(user_settings.get("repeat_seconds", 5) or 5),
+        "sound_user_online": bool(user_settings.get("sound_user_online", 0)),
+        "sound_incoming_file": bool(
+            user_settings.get("sound_incoming_file", 1)
+        ),
+        "sound_incoming_call": bool(
+            user_settings.get("sound_incoming_call", 1)
+        ),
     }
 
     style.set_theme(state["theme_mode"])
@@ -476,11 +674,13 @@ def home_page(user_email):
     tray_icon = None
     message_service = None
 
-    header = tk.Frame(win, bg=style.CARD, height=5)
+    header = tk.Frame(win, bg=style.ACCENT, height=3)
     header.pack(fill="x")
 
     top_menu_frame = tk.Frame(win, bg=style.CARD)
     top_menu_frame.pack(fill="x")
+
+    tk.Frame(win, bg=style.BORDER, height=1).pack(fill="x")
 
     main_frame = tk.Frame(win, bg=style.BG)
     main_frame.pack(fill="both", expand=True, pady=4)
@@ -491,7 +691,7 @@ def home_page(user_email):
     tk.Label(
         content_frame,
         text="Select a user to start a conversation",
-        font=("Segoe UI", 12),
+        font=style.ui_font(12),
         bg=style.BG,
         fg=style.MUTED
     ).pack(expand=True)
@@ -507,7 +707,7 @@ def home_page(user_email):
     tk.Label(
         users_frame,
         text="LAN Users",
-        font=("Segoe UI", 10, "bold"),
+        font=style.ui_font(11, True),
         bg=style.CARD,
         fg=style.WHITE,
         anchor="w"
@@ -552,13 +752,7 @@ def home_page(user_email):
         try:
             conv = active_chat["conversation"]
             if conv is not None and conv.winfo_exists():
-                conv.config(font=(style.FONT, size))
-                conv.tag_config("name", font=(style.FONT, size, "bold"),
-                                foreground=style.WHITE)
-                conv.tag_config("name_me", font=(style.FONT, size, "bold"),
-                                foreground=style.ACCENT)
-                conv.tag_config("meta", font=(style.FONT, max(size - 3, 8)),
-                                foreground=style.MUTED)
+                conv.set_font(size)
             box = active_chat["input"]
             if box is not None and box.winfo_exists():
                 box.config(font=(style.FONT, size))
@@ -574,13 +768,7 @@ def home_page(user_email):
             return
 
         is_me = sender == local_username
-        conv.config(state="normal")
-        conv.insert("end", "You" if is_me else sender,
-                    "name_me" if is_me else "name")
-        conv.insert("end", f"  {format_timestamp(ts)}\n", "meta")
-        conv.insert("end", f"{message}\n\n")
-        conv.config(state="disabled")
-        conv.see("end")
+        conv.add_message(message, format_timestamp(ts), is_me)
 
     def check_spelling(event=None):
         """Red underline for misspelled words (needs pyspellchecker)."""
@@ -613,9 +801,111 @@ def home_page(user_email):
         except tk.TclError:
             pass
 
+    # ------------------------------------------------------------------
+    # Sound events (Settings -> Sound Events)
+    # ------------------------------------------------------------------
+    repeat_jobs = {}                 # sender -> pending "repeat sound" timer
+    app_started = time.monotonic()
+
+    SOUND_KEYS = {
+        "message": "sound_incoming_message",
+        "broadcast": "sound_broadcast",
+        "online": "sound_user_online",
+        "file": "sound_incoming_file",
+        "call": "sound_incoming_call",
+    }
+
+    def play_event_sound(kind):
+        """Plays the sound of one event, only if 'Play sounds on' and that
+        event are both enabled.  kind: message, broadcast, online, file, call
+        (file / call / broadcast are ready for when those features exist)."""
+        if not state["sound_enabled"] or not state.get(SOUND_KEYS[kind]):
+            return
+
+        try:
+            if kind in ("message", "broadcast"):
+                # the notification tune chosen in Settings -> Sound Events
+                if not settings.play_tune(state["sound_tune"]):
+                    win.bell()
+            elif winsound is not None:
+                tones = {
+                    "message": winsound.MB_ICONASTERISK,
+                    "broadcast": winsound.MB_ICONQUESTION,
+                    "online": winsound.MB_OK,
+                    "file": winsound.MB_ICONEXCLAMATION,
+                    "call": winsound.MB_ICONHAND,
+                }
+                winsound.MessageBeep(tones[kind])
+            else:
+                win.bell()
+        except Exception as e:
+            print("[SOUND] Could not play sound:", e)
+
+    def conversation_active(sender):
+        """True when the user is looking at the chat with this sender."""
+        try:
+            return (
+                state["message_mode"] != "single"
+                and win.state() in ("normal", "zoomed")
+                and win.focus_displayof() is not None
+                and active_chat["username"] == sender
+            )
+        except tk.TclError:
+            return False
+
+    def stop_repeat(sender):
+        job = repeat_jobs.pop(sender, None)
+
+        if job is not None:
+            try:
+                win.after_cancel(job)
+            except tk.TclError:
+                pass
+
+    def start_repeat(sender):
+        """Repeat the sound every N seconds until the chat is active."""
+        stop_repeat(sender)
+        delay = max(1, int(state["repeat_seconds"])) * 1000
+
+        def tick():
+            repeat_jobs.pop(sender, None)
+
+            try:
+                if not win.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+
+            if (
+                conversation_active(sender)
+                or not state["sound_enabled"]
+                or not state["repeat_sound"]
+            ):
+                return
+
+            play_event_sound("message")
+            repeat_jobs[sender] = win.after(delay, tick)
+
+        repeat_jobs[sender] = win.after(delay, tick)
+
+    def incoming_sound(sender, was_active):
+        """Sound for a new chat message (rules from Sound Events tab)."""
+        if not state["sound_enabled"] or not state["sound_incoming_message"]:
+            return
+
+        # "only when conversation window stays in background"
+        if state["sound_when"] == "background" and was_active:
+            return
+
+        play_event_sound("message")
+
+        if state["repeat_sound"] and not was_active:
+            start_repeat(sender)
+
     def open_user_chat(peer_username):
         active_chat["username"] = peer_username
-        new_unread = unread.pop(peer_username, 0)
+        stop_repeat(peer_username)
+        unread.pop(peer_username, None)
         render_users()
 
         for widget in content_frame.winfo_children():
@@ -623,55 +913,41 @@ def home_page(user_email):
 
         chat_header = tk.Frame(content_frame, bg=style.CARD)
         chat_header.pack(fill="x")
+        tk.Frame(content_frame, bg=style.BORDER, height=1).pack(fill="x")
 
         tk.Label(
             chat_header,
             text=f"💬  {peer_username}",
-            font=("Segoe UI", 13, "bold"),
+            font=style.HEADING_FONT,
             bg=style.CARD,
             fg=style.WHITE
         ).pack(side="left", padx=15, pady=15)
 
-        conversation = tk.Text(
-            content_frame,
-            bg=style.BG,
-            fg=style.WHITE,
-            font=(style.FONT, font_px()),
-            width=1,
-            height=1,
-            wrap="word",
-            state="disabled",
-            relief="flat",
-            insertbackground=style.WHITE
-        )
+        conversation = ChatView(content_frame, font_px())
         conversation.pack(
             fill="both",
             expand=True,
             padx=10,
-            pady=10
+            pady=(10, 4)
         )
 
         active_chat["conversation"] = conversation
 
-        # Which old messages to show?
-        #  - Single message mode: none (each message has its own window)
-        #  - Conversation + "Display recent messages": last RECENT_LIMIT
-        #  - Conversation without it: only the new unread ones
-        if state["message_mode"] == "single":
-            limit = 0
-        elif state["display_recent_messages"]:
-            limit = RECENT_LIMIT
-        else:
-            limit = new_unread
+        # Every saved message between the two users is always shown.
+        # Nothing is ever removed from the chat.
+        try:
+            history = get_chat_history(local_username, peer_username)
+            apply_chat_fonts()
 
-        if limit > 0:
-            try:
-                history = get_chat_history(local_username, peer_username)
-                apply_chat_fonts()
-                for sender, message, timestamp in history[-limit:]:
-                    append_message(sender, message, timestamp)
-            except sqlite3.Error as e:
-                print("[DATABASE] History error:", e)
+            for sender, message, timestamp in history:
+                append_message(sender, message, timestamp)
+
+            print(
+                f"[CHAT] Loaded {len(history)} saved message(s) "
+                f"with {peer_username}"
+            )
+        except sqlite3.Error as e:
+            print("[DATABASE] History error:", e)
 
         bottom_frame = tk.Frame(content_frame, bg=style.CARD)
         bottom_frame.pack(side="bottom", fill="x", padx=10, pady=10,
@@ -686,7 +962,12 @@ def home_page(user_email):
             bg=style.INPUT_BG,
             fg=style.BLACK,
             insertbackground=style.BLACK,
-            relief="flat"
+            relief="flat",
+            padx=10,
+            pady=8,
+            highlightthickness=1,
+            highlightbackground=style.BORDER,
+            highlightcolor=style.ACCENT
         )
         message_input.pack(
             side="left",
@@ -695,7 +976,7 @@ def home_page(user_email):
             padx=8,
             pady=8
         )
-        message_input.tag_config("misspelled", foreground="#d32f2f",
+        message_input.tag_config("misspelled", foreground=style.RED,
                                  underline=True)
 
         active_chat["input"] = message_input
@@ -742,7 +1023,8 @@ def home_page(user_email):
                 save_message(
                     local_username,
                     receiver,
-                    message
+                    message,
+                    success
                 )
             except sqlite3.Error as e:
                 messagebox.showerror(
@@ -769,7 +1051,7 @@ def home_page(user_email):
         quick_btn = tk.Menubutton(
             bottom_frame,
             text="⚡ Quick",
-            font=("Segoe UI", 10, "bold"),
+            font=style.ui_font(10, True),
             bg=style.CARD,
             fg=style.WHITE,
             activebackground=style.CARD,
@@ -840,13 +1122,19 @@ def home_page(user_email):
         pop.configure(bg=style.BG)
         style.center_window(pop, 400, 240)
 
-        tk.Label(pop, text=sender, font=("Segoe UI", 12, "bold"),
+        tk.Label(pop, text=sender, font=style.ui_font(13, True),
                  bg=style.BG, fg=style.ACCENT).pack(anchor="w", padx=15, pady=(12, 0))
         tk.Label(pop, text=format_timestamp(), bg=style.BG,
                  fg=style.MUTED).pack(anchor="w", padx=15)
         tk.Label(pop, text=message, wraplength=360, justify="left",
                  font=(style.FONT, font_px()), bg=style.BG,
                  fg=style.WHITE).pack(anchor="w", padx=15, pady=10)
+
+        def close():
+            stop_repeat(sender)
+            pop.destroy()
+
+        pop.protocol("WM_DELETE_WINDOW", close)
 
         def reply():
             pop.destroy()
@@ -857,7 +1145,7 @@ def home_page(user_email):
         btns.pack(side="bottom", fill="x", padx=15, pady=12)
         style.make_button(btns, "Reply", reply, kind="primary", width=10
                           ).pack(side="right", padx=5)
-        style.make_button(btns, "Close", pop.destroy, kind="secondary",
+        style.make_button(btns, "Close", close, kind="secondary",
                           width=10).pack(side="right", padx=5)
 
         # "Minimize incoming messages to taskbar" / "foreground"
@@ -893,7 +1181,7 @@ def home_page(user_email):
             except tk.TclError:
                 pass
 
-    def on_incoming_message(sender, message):
+    def on_incoming_message(sender, message, uid=None):
         print(
             f"[HOME] Incoming message from {sender}: {message}"
         )
@@ -902,7 +1190,8 @@ def home_page(user_email):
             save_message(
                 sender,
                 local_username,
-                message
+                message,
+                uid
             )
         except sqlite3.Error as e:
             print("[DATABASE] Incoming save error:", e)
@@ -913,8 +1202,11 @@ def home_page(user_email):
                 if not win.winfo_exists():
                     return
 
+                was_active = conversation_active(sender)
+
                 if state["message_mode"] == "single":
                     show_single_popup(sender, message)
+                    incoming_sound(sender, was_active)
                     return
 
                 if active_chat["username"] == sender:
@@ -924,6 +1216,7 @@ def home_page(user_email):
                     render_users()
 
                 notify_incoming(sender)
+                incoming_sound(sender, was_active)
 
             except tk.TclError as e:
                 print("[UI] Incoming message UI error:", e)
@@ -992,13 +1285,13 @@ def home_page(user_email):
                     STATUS_COLORS["Offline"]
                 ),
                 bg=style.CARD,
-                font=("Segoe UI", 11)
+                font=style.ui_font(11)
             ).pack(side="left", padx=(0, 7))
 
             name_label = tk.Label(
                 row,
                 text=f"{username}  ({count})" if count else username,
-                font=("Segoe UI", 10, "bold" if count else "normal"),
+                font=style.ui_font(11, bool(count)),
                 bg=style.CARD,
                 fg=style.ACCENT if count else style.WHITE,
                 cursor="hand2",
@@ -1014,6 +1307,7 @@ def home_page(user_email):
 
     def update_online_users(users):
         current_names = set()
+        came_online = False
 
         for user in users:
             username = user.get("username")
@@ -1021,12 +1315,21 @@ def home_page(user_email):
             if not username or username == local_username:
                 continue
 
+            previous = known_users.get(username, {}).get("status", "Offline")
+
+            if previous == "Offline" and user.get("status") == "Online":
+                came_online = True
+
             current_names.add(username)
             known_users[username] = user.copy()
 
         for username in list(known_users):
             if username not in current_names:
                 known_users[username]["status"] = "Offline"
+
+        # (no sounds while the first users are still being discovered)
+        if came_online and time.monotonic() - app_started > 8:
+            play_event_sound("online")
 
         render_users()
 
@@ -1158,6 +1461,16 @@ def home_page(user_email):
             font_size=new.get("font_size", state["font_size"]),
             enter_to_send=bool(new.get("enter_to_send", 1)),
             quick_messages=settings.get_quick_messages(new),
+            sound_enabled=bool(new.get("sound_enabled", 1)),
+            sound_incoming_message=bool(new.get("sound_incoming_message", 1)),
+            sound_broadcast=bool(new.get("sound_broadcast", 1)),
+            sound_when=new.get("sound_when", state["sound_when"]),
+            sound_tune=new.get("sound_tune", state["sound_tune"]),
+            repeat_sound=bool(new.get("repeat_sound", 0)),
+            repeat_seconds=int(new.get("repeat_seconds", 5)),
+            sound_user_online=bool(new.get("sound_user_online", 0)),
+            sound_incoming_file=bool(new.get("sound_incoming_file", 1)),
+            sound_incoming_call=bool(new.get("sound_incoming_call", 1)),
         )
 
         apply_chat_fonts()      # font size changes live in the open chat
@@ -1213,6 +1526,9 @@ def home_page(user_email):
 
         status_after_id = None
         theme_after_id = None
+
+        for name in list(repeat_jobs):
+            stop_repeat(name)
 
         try:
             win.unbind_all("<KeyPress>")
@@ -1285,10 +1601,10 @@ def home_page(user_email):
     ]
 
     for icon_text, item_title, screen_function in menu_items:
-        tk.Button(
+        menu_btn = tk.Button(
             top_menu_frame,
             text=f"{icon_text}  {item_title}",
-            font=("Segoe UI", 10, "bold"),
+            font=style.ui_font(10, True),
             bg=style.CARD,
             fg=style.WHITE,
             activebackground=style.CARD,
@@ -1299,12 +1615,14 @@ def home_page(user_email):
             padx=12,
             pady=14,
             command=screen_function
-        ).pack(side="left", padx=5, pady=3)
+        )
+        menu_btn.pack(side="left", padx=5, pady=3)
+        style.hover_text(menu_btn)
 
-    tk.Button(
+    theme_btn = tk.Button(
         top_menu_frame,
         text="🌓  Theme",
-        font=("Segoe UI", 10, "bold"),
+        font=style.ui_font(10, True),
         bg=style.CARD,
         fg=style.WHITE,
         activebackground=style.CARD,
@@ -1315,7 +1633,9 @@ def home_page(user_email):
         padx=12,
         pady=14,
         command=toggle_theme
-    ).pack(side="right", padx=5, pady=3)
+    )
+    theme_btn.pack(side="right", padx=5, pady=3)
+    style.hover_text(theme_btn)
 
     win.bind_all("<KeyPress>", mark_activity)
     win.bind_all("<Button>", mark_activity)
@@ -1338,4 +1658,5 @@ def home_page(user_email):
 
 
 if __name__ == "__main__":
-    home_page("")   # normally called from login with the user's email
+    from login import show_login
+    show_login()

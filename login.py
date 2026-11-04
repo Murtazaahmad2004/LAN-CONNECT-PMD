@@ -1,79 +1,38 @@
-import os
 import tkinter as tk
 import sqlite3
 import hashlib
 import hmac
 
 from tkinter import messagebox
-from PIL import Image, ImageTk
 
 import style
+import brand
 import register
 import home
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
-LOGO_PATH = style.resource_path("pmd_logo.png")
-PLACEHOLDER_COLOR = "#8A94A6"
 PANEL_WIDTH = 440
+CARD_WIDTH = 340
 
-def load_logo(max_height=220):
-    try:
-        img = Image.open(LOGO_PATH).convert("RGBA")
-        ratio = max_height / img.height
-        img = img.resize((int(img.width * ratio), max_height), Image.LANCZOS)
-        return ImageTk.PhotoImage(img)
-    except Exception:
-        return None
 
 def show_login():
     win = tk.Tk()
     win.title("LAN Connect - Login")
     style.center_window(win)
-    win.minsize(760, 520)
+    win.minsize(760, 560)
     win.configure(bg=style.BG)
 
     password_visible = {"value": False}
 
-    left_side = tk.Frame(win, bg=style.BG)
-    left_side.place(x=0, y=0, relwidth=1, relheight=1, width=-PANEL_WIDTH)
+    # ------------------------------------------------------------------
+    # Left side: brand panel (gradient, logo, features)
+    # ------------------------------------------------------------------
+    brand.build_brand_panel(win, PANEL_WIDTH)
 
-    brand = tk.Frame(left_side, bg=style.BG)
-    brand.place(relx=0.5, rely=0.5, anchor="center")
-
-    logo_image = load_logo()
-    if logo_image:
-        logo_holder = tk.Frame(brand, bg="#FFFFFF", padx=20, pady=20)
-        logo_holder.pack()
-
-        logo_label = tk.Label(logo_holder, image=logo_image, bg="#FFFFFF")
-        logo_label.image = logo_image
-        logo_label.pack()
-    else:
-        tk.Label(
-            brand,
-            text="PMD",
-            font=("Segoe UI", 56, "bold"),
-            bg=style.BG,
-            fg=style.ACCENT,
-        ).pack()
-
-    tk.Label(
-        brand,
-        text="LAN Connect",
-        font=("Segoe UI", 28, "bold"),
-        bg=style.BG,
-        fg=style.WHITE,
-    ).pack(pady=(16, 0))
-
-    tk.Label(
-        brand,
-        text="Chat and share files on your local network",
-        font=("Segoe UI", 11),
-        bg=style.BG,
-        fg=style.MUTED,
-    ).pack(pady=(6, 0))
-
+    # ------------------------------------------------------------------
+    # Right side: sign-in card
+    # ------------------------------------------------------------------
     right_panel = tk.Frame(
         win,
         bg=style.CARD,
@@ -83,23 +42,27 @@ def show_login():
     right_panel.place(relx=1.0, rely=0, anchor="ne", relheight=1.0, width=PANEL_WIDTH)
 
     card = tk.Frame(right_panel, bg=style.CARD)
-    card.place(relx=0.5, rely=0.5, anchor="center", width=340)
+    card.place(relx=0.5, rely=0.5, anchor="center", width=CARD_WIDTH)
+
+    tk.Frame(card, bg=style.ACCENT, height=4, width=48).pack(
+        anchor="w", pady=(0, 18)
+    )
 
     tk.Label(
         card,
-        text="Welcome Back",
-        font=("Segoe UI", 22, "bold"),
+        text="Welcome back",
+        font=style.ui_font(24, True),
         bg=style.CARD,
-        fg=style.WHITE,
+        fg=style.TEXT,
     ).pack(anchor="w")
 
     tk.Label(
         card,
-        text="Sign in to continue",
-        font=("Segoe UI", 10),
+        text="Sign in to your account to continue",
+        font=style.ui_font(10),
         bg=style.CARD,
         fg=style.MUTED,
-    ).pack(anchor="w", pady=(2, 24))
+    ).pack(anchor="w", pady=(4, 26))
 
     placeholder_state = {}
 
@@ -114,21 +77,21 @@ def show_login():
         def show_placeholder():
             entry.delete(0, tk.END)
             entry.insert(0, placeholder)
-            entry.config(fg=PLACEHOLDER_COLOR, show="")
+            entry.config(fg=style.PLACEHOLDER, show="")
             placeholder_state[entry] = True
 
         def on_focus_in(event):
             if placeholder_state[entry]:
                 entry.delete(0, tk.END)
-                entry.config(fg=style.BLACK, show=current_mask())
+                entry.config(fg=style.TEXT_INPUT, show=current_mask())
                 placeholder_state[entry] = False
 
         def on_focus_out(event):
             if not entry.get():
                 show_placeholder()
 
-        entry.bind("<FocusIn>", on_focus_in)
-        entry.bind("<FocusOut>", on_focus_out)
+        entry.bind("<FocusIn>", on_focus_in, add="+")
+        entry.bind("<FocusOut>", on_focus_out, add="+")
         show_placeholder()
 
     def get_text(entry):
@@ -136,15 +99,15 @@ def show_login():
             return ""
         return entry.get()
 
-    def make_field(label_text, show=None):
+    def make_field(label_text, icon, show=None):
         tk.Label(
             card,
             text=label_text,
-            font=("Segoe UI", 9, "bold"),
+            font=style.ui_font(9, True),
             bg=style.CARD,
-            fg=style.WHITE,
+            fg=style.LABEL,
             anchor="w",
-        ).pack(fill="x", pady=(0, 5))
+        ).pack(fill="x", pady=(0, 6))
 
         wrap = tk.Frame(
             card,
@@ -153,26 +116,35 @@ def show_login():
             highlightcolor=style.ACCENT,
             highlightthickness=1,
         )
-        wrap.pack(fill="x", pady=(0, 14))
+        wrap.pack(fill="x", pady=(0, 16))
+
+        tk.Label(
+            wrap,
+            text=icon,
+            font=("Segoe UI Emoji", 11),
+            bg=style.INPUT_BG,
+            fg=style.MUTED,
+        ).pack(side="left", padx=(12, 0))
 
         entry = tk.Entry(
             wrap,
-            font=("Segoe UI", 11),
+            font=style.INPUT_FONT,
             bg=style.INPUT_BG,
-            fg=style.BLACK,
-            insertbackground=style.BLACK,
+            fg=style.TEXT_INPUT,
+            insertbackground=style.TEXT_INPUT,
             relief="flat",
             bd=0,
             show=show or "",
         )
-        entry.pack(side="left", fill="x", expand=True, padx=(10, 4), ipady=8)
+        entry.pack(side="left", fill="x", expand=True, padx=(8, 4), ipady=10)
+        style.focus_border(entry, wrap)
         return entry, wrap
 
-    entry_email, _ = make_field("Email")
-    entry_password, password_wrap = make_field("Password", show="•")
+    entry_email, _ = make_field("Email address", "✉")
+    entry_password, password_wrap = make_field("Password", "🔒", show="•")
 
-    add_placeholder(entry_email, "Email")
-    add_placeholder(entry_password, "Password", secret=True)
+    add_placeholder(entry_email, "name@company.com")
+    add_placeholder(entry_password, "Enter your password", secret=True)
 
     eye = tk.Label(
         password_wrap,
@@ -182,7 +154,7 @@ def show_login():
         fg=style.MUTED,
         cursor="hand2",
     )
-    eye.pack(side="right", padx=(0, 10))
+    eye.pack(side="right", padx=(0, 12))
 
     def toggle_password(event=None):
         password_visible["value"] = not password_visible["value"]
@@ -196,17 +168,17 @@ def show_login():
     error_label = tk.Label(
         card,
         text="",
-        font=("Segoe UI", 9),
+        font=style.ui_font(9),
         bg=style.CARD,
-        fg="#ef4444",
+        fg=style.RED,
         anchor="w",
-        wraplength=340,
+        wraplength=CARD_WIDTH,
         justify="left",
     )
     error_label.pack(fill="x", pady=(0, 6))
 
     def show_error(message):
-        error_label.config(text=message)
+        error_label.config(text=f"⚠  {message}" if message else "")
 
     def verify_password(entered_password, stored_password):
         try:
@@ -264,19 +236,19 @@ def show_login():
         else:
             show_error("Incorrect email or password.")
 
-    style.make_button(card, "Login", check, kind="primary").pack(
-        fill="x", pady=(4, 0)
-    )
+    style.make_button(
+        card, "Sign In", check, kind="primary", pady=11
+    ).pack(fill="x", pady=(4, 0))
 
     divider = tk.Frame(card, bg=style.CARD)
-    divider.pack(fill="x", pady=18)
+    divider.pack(fill="x", pady=20)
     tk.Frame(divider, bg=style.BORDER, height=1).pack(
         side="left", fill="x", expand=True, pady=6
     )
     tk.Label(
         divider,
         text="  or  ",
-        font=("Segoe UI", 9),
+        font=style.ui_font(9),
         bg=style.CARD,
         fg=style.MUTED,
     ).pack(side="left")
@@ -290,31 +262,46 @@ def show_login():
     tk.Label(
         footer,
         text="Don't have an account?",
-        font=("Segoe UI", 10),
+        font=style.ui_font(10),
         bg=style.CARD,
         fg=style.MUTED,
     ).pack(side="left")
 
     register_link = tk.Label(
         footer,
-        text=" Register",
-        font=("Segoe UI", 10, "bold"),
+        text=" Create one",
+        font=style.ui_font(10, True),
         bg=style.CARD,
         fg=style.ACCENT,
         cursor="hand2",
     )
     register_link.pack(side="left")
     register_link.bind("<Button-1>", lambda e: register.open_register())
-    register_link.bind("<Enter>", lambda e: register_link.config(font=("Segoe UI", 10, "bold underline")))
-    register_link.bind("<Leave>", lambda e: register_link.config(font=("Segoe UI", 10, "bold")))
+    register_link.bind(
+        "<Enter>",
+        lambda e: register_link.config(fg=style.ACCENT_HOVER),
+    )
+    register_link.bind(
+        "<Leave>",
+        lambda e: register_link.config(fg=style.ACCENT),
+    )
 
-    entry_email.bind("<Return>", lambda e: entry_password.focus_set())
-    entry_password.bind("<Return>", check)
-    entry_email.bind("<Key>", lambda e: show_error(""))
-    entry_password.bind("<Key>", lambda e: show_error(""))
+    tk.Label(
+        right_panel,
+        text="Need help? Contact your IT administrator.",
+        font=style.ui_font(9),
+        bg=style.CARD,
+        fg=style.MUTED,
+    ).place(relx=0.5, rely=1.0, anchor="s", y=-20)
+
+    entry_email.bind("<Return>", lambda e: entry_password.focus_set(), add="+")
+    entry_password.bind("<Return>", check, add="+")
+    entry_email.bind("<Key>", lambda e: show_error(""), add="+")
+    entry_password.bind("<Key>", lambda e: show_error(""), add="+")
 
     win.focus_set()
     win.mainloop()
+
 
 if __name__ == "__main__":
     show_login()

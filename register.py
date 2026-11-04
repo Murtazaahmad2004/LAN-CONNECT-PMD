@@ -8,6 +8,7 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 
 import style
+import brand
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
@@ -75,44 +76,7 @@ def open_register():
     password_visible = {"value": False}
     placeholder_state = {}
 
-    left_side = tk.Frame(win, bg=style.BG)
-    left_side.place(x=0, y=0, relwidth=1, relheight=1, width=-PANEL_WIDTH)
-
-    brand = tk.Frame(left_side, bg=style.BG)
-    brand.place(relx=0.5, rely=0.5, anchor="center")
-
-    logo_image = load_logo()
-    if logo_image:
-        logo_holder = tk.Frame(brand, bg="#FFFFFF", padx=20, pady=20)
-        logo_holder.pack()
-
-        logo_label = tk.Label(logo_holder, image=logo_image, bg="#FFFFFF")
-        logo_label.image = logo_image
-        logo_label.pack()
-    else:
-        tk.Label(
-            brand,
-            text="PMD",
-            font=("Segoe UI", 56, "bold"),
-            bg=style.BG,
-            fg=style.ACCENT,
-        ).pack()
-
-    tk.Label(
-        brand,
-        text="LAN Connect",
-        font=("Segoe UI", 28, "bold"),
-        bg=style.BG,
-        fg=style.WHITE,
-    ).pack(pady=(16, 0))
-
-    tk.Label(
-        brand,
-        text="Chat and share files on your local network",
-        font=("Segoe UI", 11),
-        bg=style.BG,
-        fg=style.MUTED,
-    ).pack(pady=(6, 0))
+    brand.build_brand_panel(win, PANEL_WIDTH)
 
     right_panel = tk.Frame(
         win,
@@ -124,6 +88,10 @@ def open_register():
 
     card = tk.Frame(right_panel, bg=style.CARD)
     card.place(relx=0.5, rely=0.5, anchor="center", width=380)
+
+    tk.Frame(card, bg=style.ACCENT, height=4, width=48).pack(
+        anchor="w", pady=(0, 14)
+    )
 
     tk.Label(
         card,
@@ -204,7 +172,8 @@ def open_register():
             bd=0,
             show="•" if secret else "",
         )
-        entry.pack(side="left", fill="x", expand=True, padx=(10, 4), ipady=7)
+        entry.pack(side="left", fill="x", expand=True, padx=(10, 4), ipady=8)
+        style.focus_border(entry, wrap)
 
         add_placeholder(entry, placeholder, secret=secret)
         return entry, wrap
@@ -258,7 +227,7 @@ def open_register():
         text="",
         font=("Segoe UI", 9),
         bg=style.CARD,
-        fg="#ef4444",
+        fg=style.RED,
         anchor="w",
         wraplength=380,
         justify="left",
@@ -332,8 +301,8 @@ def open_register():
             )
             win.destroy()
 
-    style.make_button(card, "Register", register_user, kind="primary").pack(
-        fill="x", pady=(4, 0)
+    style.make_button(card, "Register", register_user, kind="primary", pady=10).pack(
+        fill="x", pady=(6, 0)
     )
 
     footer = tk.Frame(card, bg=style.CARD)

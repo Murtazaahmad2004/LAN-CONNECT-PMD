@@ -1,10 +1,19 @@
 import json
+import math
+import os
 import sqlite3
+import struct
+import wave
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from contextlib import contextmanager
 import style
+
+try:
+    import winsound
+except ImportError:
+    winsound = None
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
@@ -31,6 +40,16 @@ DEFAULTS = {
     "spell_check": 1,
     "font_size": "Large",                    # Normal / Large / Extra large
     "quick_messages": json.dumps(DEFAULT_QUICK_MESSAGES),
+    # ---- Sound Events tab ("sound_enabled" = Play sounds on) ----
+    "sound_incoming_message": 1,
+    "sound_broadcast": 1,
+    "sound_when": "background",              # "always" or "background"
+    "repeat_sound": 0,
+    "repeat_seconds": 5,
+    "sound_user_online": 0,
+    "sound_incoming_file": 1,
+    "sound_incoming_call": 1,
+    "sound_tune": "Classic Bell",            # notification tune for messages
 }
 
 @contextmanager
@@ -71,6 +90,15 @@ def ensure_settings_table():
         "spell_check": "INTEGER NOT NULL DEFAULT 1",
         "font_size": "TEXT NOT NULL DEFAULT 'Large'",
         "quick_messages": "TEXT DEFAULT ''",
+        "sound_incoming_message": "INTEGER NOT NULL DEFAULT 1",
+        "sound_broadcast": "INTEGER NOT NULL DEFAULT 1",
+        "sound_when": "TEXT NOT NULL DEFAULT 'background'",
+        "repeat_sound": "INTEGER NOT NULL DEFAULT 0",
+        "repeat_seconds": "INTEGER NOT NULL DEFAULT 5",
+        "sound_user_online": "INTEGER NOT NULL DEFAULT 0",
+        "sound_incoming_file": "INTEGER NOT NULL DEFAULT 1",
+        "sound_incoming_call": "INTEGER NOT NULL DEFAULT 1",
+        "sound_tune": "TEXT NOT NULL DEFAULT 'Classic Bell'",
     }
     with _db() as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS app_settings
@@ -110,6 +138,97 @@ def save_settings(user_email, values):
             [user_email] + [data[k] for k in DEFAULTS],
         )
 
+# ---------------------------------------------------------------------------
+# Notification tunes: small WAV files created automatically on first use
+# ---------------------------------------------------------------------------
+SAMPLE_RATE = 22050
+SOUND_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_NAME)), "sounds")
+DEFAULT_TUNE = "Classic Bell"
+
+# timbre -> parts of the sound: (frequency ratio, volume, decay speed)
+TIMBRES = {
+    "bell":    [(1.0, 1.0, 3.0), (2.0, 0.5, 4.0), (2.76, 0.35, 5.0), (5.4, 0.2, 7.0)],
+    "chime":   [(1.0, 1.0, 2.5), (2.0, 0.4, 3.5), (3.0, 0.2, 4.5)],
+    "marimba": [(1.0, 1.0, 9.0), (4.0, 0.4, 14.0), (10.0, 0.15, 20.0)],
+    "soft":    [(1.0, 1.0, 5.0), (2.0, 0.15, 8.0)],
+    "digital": [(1.0, 1.0, 6.0), (3.0, 0.3, 8.0), (5.0, 0.15, 10.0)],
+}
+
+# tune name -> notes: (frequency Hz, start second, length seconds, timbre)
+TUNES = {
+    "Classic Bell":   [(1046.5, 0.00, 1.4, "bell")],
+    "Double Chime":   [(784.0, 0.00, 0.9, "chime"), (1046.5, 0.25, 1.3, "chime")],
+    "Ding Dong":      [(880.0, 0.00, 1.0, "bell"), (659.3, 0.50, 1.5, "bell")],
+    "Marimba":        [(659.3, 0.00, 0.5, "marimba"), (784.0, 0.12, 0.5, "marimba"),
+                       (1046.5, 0.24, 0.7, "marimba")],
+    "Soft Notify":    [(523.3, 0.00, 0.9, "soft"), (659.3, 0.18, 1.2, "soft")],
+    "Digital Alert":  [(1318.5, 0.00, 0.25, "digital"), (1568.0, 0.15, 0.40, "digital")],
+}
+
+
+def tune_names():
+    return list(TUNES)
+
+
+def _render_tune(notes):
+    total = max(start + length for _f, start, length, _t in notes) + 0.05
+    count = int(total * SAMPLE_RATE)
+    buf = [0.0] * count
+
+    for freq, start, length, timbre in notes:
+        first = int(start * SAMPLE_RATE)
+        for i in range(int(length * SAMPLE_RATE)):
+            idx = first + i
+            if idx >= count:
+                break
+            t = i / SAMPLE_RATE
+            value = 0.0
+            for ratio, volume, decay in TIMBRES[timbre]:
+                f = freq * ratio
+                if f < SAMPLE_RATE / 2:
+                    value += volume * math.exp(-decay * t) * math.sin(
+                        2 * math.pi * f * t)
+            fade_in = min(1.0, t / 0.004)                 # no click at the start
+            fade_out = max(0.0, min(1.0, (length - t) / 0.03))
+            buf[idx] += value * fade_in * fade_out
+
+    peak = max(abs(x) for x in buf) or 1.0
+    scale = 0.8 * 32767 / peak
+    return b"".join(struct.pack("<h", int(x * scale)) for x in buf)
+
+
+def tune_path(name):
+    """Returns the WAV file of a tune (creates it the first time)."""
+    if name not in TUNES:
+        name = DEFAULT_TUNE
+    os.makedirs(SOUND_DIR, exist_ok=True)
+    path = os.path.join(SOUND_DIR, name.lower().replace(" ", "_") + ".wav")
+
+    if not os.path.exists(path):
+        temp = path + ".tmp"
+        with wave.open(temp, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            wav.writeframes(_render_tune(TUNES[name]))
+        os.replace(temp, path)
+
+    return path
+
+
+def play_tune(name):
+    """Plays a notification tune. Returns False if it could not be played."""
+    if winsound is None:
+        return False
+    try:
+        winsound.PlaySound(tune_path(name),
+                           winsound.SND_FILENAME | winsound.SND_ASYNC)
+        return True
+    except Exception as e:
+        print("[SOUND] Could not play tune:", e)
+        return False
+
+
 # ---------- Helpers for your chat / message window ----------
 def message_font(size_name):
     """Returns a tkinter font tuple for the chosen font size."""
@@ -147,18 +266,19 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
         notebook.add(tabs[name], text=name)
 
     def heading(tab, title):
-        tk.Label(tab, text=title, font=(style.FONT, 16, "bold"), bg=style.BG,
+        tk.Label(tab, text=title, font=style.ui_font(17, True), bg=style.BG,
                  fg=style.WHITE).pack(anchor="w", padx=22, pady=(10, 6))
 
     def section(tab, title):
         tk.Label(tab, text=title, bg=style.BG, fg=style.WHITE,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+                 font=style.ui_font(11, True)).pack(anchor="w", padx=25, pady=(5, 2))
         tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
 
     vars_ = {}
-    def check(tab, label, key, padx=28, pady=2):
+    def check(tab, label, key, padx=28, pady=2, command=None):
         vars_[key] = tk.BooleanVar(value=bool(data[key]))
-        cb = tk.Checkbutton(tab, text=label, variable=vars_[key], bg=style.BG,
+        cb = tk.Checkbutton(tab, text=label, variable=vars_[key], command=command,
+                            bg=style.BG,
                             fg=style.WHITE, selectcolor=style.INPUT_BG,
                             activebackground=style.BG, activeforeground=style.WHITE,
                             disabledforeground="#888888", highlightthickness=0)
@@ -177,7 +297,7 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     tab = tabs["General"]
     heading(tab, "General")
     tk.Label(tab, text="User List", bg=style.BG, fg=style.WHITE,
-             font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+             font=style.ui_font(11, True)).pack(anchor="w", padx=25, pady=(5, 2))
     tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
     check(tab, 'Change status to "Away" when screen saver starts', "away_on_screensaver")
     check(tab, "Set status to Inactive when the application is minimized",
@@ -195,7 +315,7 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     check(tab, "Hide offline users", "hide_offline_users")
 
     tk.Label(tab, text="Appearance", bg=style.BG, fg=style.WHITE,
-             font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=25, pady=(5, 2))
+             font=style.ui_font(11, True)).pack(anchor="w", padx=25, pady=(5, 2))
     tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
     theme = tk.StringVar(value=data["theme"])
     language = tk.StringVar(value="English")
@@ -255,14 +375,14 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
         style.center_window(dlg, 430, 400)
         dlg.resizable(False, False)
 
-        tk.Label(dlg, text="Quick Messages", font=(style.FONT, 14, "bold"),
+        tk.Label(dlg, text="Quick Messages", font=style.ui_font(14, True),
                  bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=15, pady=(12, 4))
         tk.Label(dlg, text="Ready-made replies you can send with one click.",
                  bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=15)
 
         lb = tk.Listbox(dlg, height=10, bg=style.INPUT_BG, fg=style.WHITE,
                         highlightthickness=1, highlightbackground=style.BORDER,
-                        selectbackground="#2f6fed", selectforeground="white",
+                        selectbackground=style.ACCENT, selectforeground=style.ON_ACCENT,
                         activestyle="none", exportselection=False)
         lb.pack(fill="both", expand=True, padx=15, pady=8)
         for item in quick_list:
@@ -310,8 +430,8 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
         style.make_button(btns, "OK", done, kind="primary", width=8).pack(side="right")
         dlg.grab_set()
 
-    link = tk.Label(tab, text="Quick Messages Settings...", bg=style.BG, fg="#4da3ff",
-                    cursor="hand2", font=("Segoe UI", 9, "underline"))
+    link = tk.Label(tab, text="Quick Messages Settings...", bg=style.BG, fg=style.ACCENT,
+                    cursor="hand2", font=(style.FONT, 10, "underline"))
     link.pack(anchor="e", padx=40, pady=(2, 0))
     link.bind("<Button-1>", lambda e: open_quick_messages())
 
@@ -346,13 +466,81 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
 
     refresh_message_options()
 
-    # Sound and logging
-    for tab_name, key, label in [
-        ("Sound Events", "sound_enabled", "Enable sound events"),
-        ("Logging", "logging_enabled", "Enable application logging")
-    ]:
-        heading(tabs[tab_name], tab_name + " Settings")
-        check(tabs[tab_name], label, key)
+    # ------------------------------------------------------------------
+    # Sound Events tab  ->  "Sound Events List" screen
+    # ------------------------------------------------------------------
+    tab = tabs["Sound Events"]
+    heading(tab, "Sound Events List")
+    sound_when = tk.StringVar(value=data["sound_when"])
+
+    def refresh_sound_options():
+        master = bool(vars_["sound_enabled"].get())
+        for cb in (msg_cb, bc_cb, online_cb, file_cb, call_cb):
+            cb.config(state="normal" if master else "disabled")
+        tune_combo.config(state="readonly" if master else "disabled")
+        timing = master and (vars_["sound_incoming_message"].get()
+                             or vars_["sound_broadcast"].get())
+        for rb in (when_any, when_bg, repeat_cb):
+            rb.config(state="normal" if timing else "disabled")
+        repeat_on = timing and vars_["repeat_sound"].get()
+        repeat_entry.config(state="normal" if repeat_on else "disabled")
+
+    def sound_changed():
+        refresh_sound_options()
+
+    check(tab, "Play sounds on", "sound_enabled", command=sound_changed)
+    msg_cb = check(tab, "Incoming message", "sound_incoming_message",
+                   padx=50, command=sound_changed)
+    bc_cb = check(tab, "Incoming broadcast message", "sound_broadcast",
+                  padx=50, command=sound_changed)
+    when_any = radio(tab, "any time message comes in", sound_when, "always", padx=80)
+    when_bg = radio(tab, "only when conversation window stays in background",
+                    sound_when, "background", padx=80)
+
+    repeat_row = tk.Frame(tab, bg=style.BG)
+    repeat_row.pack(anchor="w", padx=80, pady=2)
+    vars_["repeat_sound"] = tk.BooleanVar(value=bool(data["repeat_sound"]))
+    repeat_cb = tk.Checkbutton(repeat_row, text="Repeat sound every",
+                               variable=vars_["repeat_sound"], command=sound_changed,
+                               bg=style.BG, fg=style.WHITE, selectcolor=style.INPUT_BG,
+                               activebackground=style.BG, activeforeground=style.WHITE,
+                               disabledforeground="#888888", highlightthickness=0)
+    repeat_cb.pack(side="left")
+    repeat_entry = style.make_entry(repeat_row, width=5, justify="center")
+    repeat_entry.insert(0, str(data["repeat_seconds"]))
+    repeat_entry.pack(side="left", padx=6, ipady=2)
+    tk.Label(repeat_row, text="seconds", bg=style.BG, fg=style.WHITE).pack(side="left")
+    tk.Label(tab, text="until message window is active", bg=style.BG,
+             fg=style.WHITE).pack(anchor="w", padx=106)
+
+    online_cb = check(tab, "User is online", "sound_user_online", padx=50)
+    file_cb = check(tab, "Incoming file", "sound_incoming_file", padx=50)
+    call_cb = check(tab, "Incoming audio/video call", "sound_incoming_call", padx=50)
+
+    # ----- Notification tune (plays for incoming messages) -----
+    section(tab, "Notification Tune")
+    tune_var = tk.StringVar(
+        value=data["sound_tune"] if data["sound_tune"] in TUNES else DEFAULT_TUNE)
+    tune_row = tk.Frame(tab, bg=style.BG)
+    tune_row.pack(anchor="w", padx=50, pady=4)
+    tk.Label(tune_row, text="Message tune:", bg=style.BG,
+             fg=style.WHITE).pack(side="left", padx=(0, 8))
+    tune_combo = ttk.Combobox(tune_row, textvariable=tune_var, values=tune_names(),
+                              state="readonly", width=22)
+    tune_combo.pack(side="left")
+
+    def preview_tune(_=None):
+        if not play_tune(tune_var.get()):
+            win.bell()
+
+    tune_combo.bind("<<ComboboxSelected>>", preview_tune)   # plays when you pick
+    style.make_button(tune_row, "▶ Play", preview_tune, kind="secondary",
+                      width=8).pack(side="left", padx=8)
+    refresh_sound_options()
+
+    # Logging
+    heading(tabs["Logging"], "Logging Settings")
+    check(tabs["Logging"], "Enable application logging", "logging_enabled")
 
     # Network
     tab = tabs["Network"]; heading(tab, "Network Settings")
@@ -386,6 +574,12 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
                 "Enter the number of minutes as a whole number between 1 and 1440.",
                 parent=win)
             return
+        secs = repeat_entry.get().strip()
+        if not secs.isdigit() or not 1 <= int(secs) <= 3600:
+            messagebox.showerror("Invalid Time",
+                "Repeat sound interval must be a whole number of seconds "
+                "between 1 and 3600.", parent=win)
+            return
         new = {k: int(v.get()) for k, v in vars_.items()}
         new["inactive_minutes"] = int(minutes)
         new.update(theme=theme.get(), language=language.get(),
@@ -393,7 +587,10 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
                    message_mode=message_mode.get(),
                    incoming_behavior=incoming.get(),
                    font_size=font_size.get(),
-                   quick_messages=json.dumps(quick_list))
+                   quick_messages=json.dumps(quick_list),
+                   sound_when=sound_when.get(),
+                   sound_tune=tune_var.get(),
+                   repeat_seconds=int(secs))
         try:
             save_settings(user_email, new)
         except Exception as exc:

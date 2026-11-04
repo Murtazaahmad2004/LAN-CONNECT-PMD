@@ -1,21 +1,69 @@
 import json
 import os
-import os
 import subprocess
 import sys
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import ttk
 
-# ------------------------------------------------------------------ fonts
-FONT = "Segoe UI"
 
-TITLE_FONT = (FONT, 22, "bold")
-SUBTITLE_FONT = (FONT, 10)
-LABEL_FONT = (FONT, 10, "bold")
-INPUT_FONT = (FONT, 11)
-BUTTON_FONT = (FONT, 11, "bold")
-SMALL_FONT = (FONT, 9)
+# ------------------------------------------------------------------ fonts
+def _installed_families():
+    """Names of the fonts installed on this computer (lower case -> real name)."""
+    try:
+        probe = tk.Tk()
+        probe.withdraw()
+        try:
+            return {name.lower(): name for name in tkfont.families(probe)}
+        finally:
+            probe.destroy()
+    except Exception:
+        return {}
+
+
+_FAMILIES = _installed_families()
+
+
+def _pick(candidates, fallback):
+    """First installed font from `candidates`, otherwise `fallback`."""
+    for name in candidates:
+        if name.lower() in _FAMILIES:
+            return _FAMILIES[name.lower()]
+    return fallback
+
+
+# Best clean UI font available on the computer
+# (Windows: Segoe UI, macOS: SF / Helvetica Neue, Linux: Noto / Ubuntu / DejaVu)
+FONT = _pick(
+    ["Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans",
+     "Ubuntu", "DejaVu Sans", "Arial"],
+    "Segoe UI",
+)
+
+# "Segoe UI Semibold" is a refined heading weight (nicer than plain bold)
+_SEMIBOLD = (
+    _pick(["Segoe UI Semibold"], None)
+    if FONT.lower().startswith("segoe") else None
+)
+
+
+def ui_font(size, bold=False):
+    """Font tuple for the whole app: ui_font(11) or ui_font(15, True)."""
+    if bold:
+        return (_SEMIBOLD, size) if _SEMIBOLD else (FONT, size, "bold")
+    return (FONT, size)
+
+
+# Type scale (use these instead of writing font tuples by hand)
+TITLE_FONT = ui_font(24, True)       # screen titles
+HEADING_FONT = ui_font(15, True)     # section / chat headings
+SUBTITLE_FONT = ui_font(11)
+LABEL_FONT = ui_font(10, True)
+INPUT_FONT = ui_font(11)
+BUTTON_FONT = ui_font(11, True)
+BODY_FONT = ui_font(10)
+SMALL_FONT = ui_font(9)
 
 # ------------------------------------------------------------ window sizes
 WINDOW_SIZE = "950x650"
@@ -25,39 +73,41 @@ CARD_PADDING_X = 38
 CARD_PADDING_Y = 28
 
 # ----------------------------------------------------------------- palettes
+# NOTE: every colour inside one theme must be unique (live theme switching
+# finds colours by value). _check_palettes() below enforces this.
 THEMES = {
     "Light": {
-        "BG": "#F1F5F9",            # window background
+        "BG": "#F4F6FA",            # window background
         "CARD": "#FFFFFF",          # panels, cards, menu bars
-        "INPUT_BG": "#F8FAFC",      # entry / text boxes
-        "TEXT": "#0F172A",          # main text
-        "TEXT_INPUT": "#1E293B",    # text typed inside inputs
-        "MUTED": "#64748B",         # secondary text
-        "PLACEHOLDER": "#94A3B8",   # placeholder text
-        "LABEL": "#334155",
-        "BORDER": "#CBD5E1",
-        "HOVER": "#E2E8F0",         # hover / secondary button
-        "ACCENT": "#0284C7",
-        "ACCENT_HOVER": "#0369A1",
-        "ON_ACCENT": "#F0F9FF",     # text on accent buttons
+        "INPUT_BG": "#F1F4F9",      # entry / text boxes
+        "TEXT": "#111827",          # main text
+        "TEXT_INPUT": "#1F2937",    # text typed inside inputs
+        "MUTED": "#6B7280",         # secondary text
+        "PLACEHOLDER": "#9CA3AF",   # placeholder text
+        "LABEL": "#374151",
+        "BORDER": "#D9DEE7",
+        "HOVER": "#E8ECF3",         # hover / secondary button
+        "ACCENT": "#2563EB",
+        "ACCENT_HOVER": "#1D4ED8",
+        "ON_ACCENT": "#F8FAFF",     # text on accent buttons
         "RED": "#DC2626",
-        "BLUE": "#2563EB",
+        "BLUE": "#3B82F6",
         "GREEN": "#16A34A",
     },
     "Dark": {
-        "BG": "#0B1120",
-        "CARD": "#111B2E",
-        "INPUT_BG": "#1E293B",
-        "TEXT": "#F8FAFC",
-        "TEXT_INPUT": "#E2E8F0",
-        "MUTED": "#94A3B8",
-        "PLACEHOLDER": "#64748B",
-        "LABEL": "#CBD5E1",
-        "BORDER": "#334155",
-        "HOVER": "#1A2740",
-        "ACCENT": "#38BDF8",
-        "ACCENT_HOVER": "#7DD3FC",
-        "ON_ACCENT": "#04121F",
+        "BG": "#0F1420",
+        "CARD": "#171E2E",
+        "INPUT_BG": "#1F2840",
+        "TEXT": "#F3F4F6",
+        "TEXT_INPUT": "#E5E7EB",
+        "MUTED": "#9CA3AF",
+        "PLACEHOLDER": "#6B7280",
+        "LABEL": "#D1D5DB",
+        "BORDER": "#2D374D",
+        "HOVER": "#222C42",
+        "ACCENT": "#4F8CFF",
+        "ACCENT_HOVER": "#7AA7FF",
+        "ON_ACCENT": "#FFFFFF",
         "RED": "#F87171",
         "BLUE": "#60A5FA",
         "GREEN": "#4ADE80",
@@ -234,11 +284,34 @@ def toggle_theme(root=None):
     return new_name
 
 
+# ------------------------------------------------------ default font setup
+def apply_default_fonts(root=None):
+    """Every widget without its own font (checkboxes, radio buttons, menus,
+    list boxes ...) now uses the app font instead of the plain system one."""
+    for name, size in (
+        ("TkDefaultFont", 10),
+        ("TkTextFont", 10),
+        ("TkMenuFont", 10),
+        ("TkHeadingFont", 10),
+        ("TkIconFont", 10),
+    ):
+        try:
+            try:
+                named = tkfont.nametofont(name, root=root)
+            except TypeError:               # older Python versions
+                named = tkfont.nametofont(name)
+            named.configure(family=FONT, size=size)
+        except tk.TclError:
+            pass
+
+
 # ---------------------------------------------------------------- ttk theme
 def setup_ttk(root=None):
     """Style ttk widgets (Notebook, Combobox, Scrollbar) for the active theme."""
     root = root or getattr(tk, "_default_root", None)
     c = THEMES[CURRENT_THEME]
+
+    apply_default_fonts(root)
 
     try:
         s = ttk.Style(root)
@@ -256,19 +329,25 @@ def setup_ttk(root=None):
             lightcolor=c["CARD"],
             darkcolor=c["CARD"],
             troughcolor=c["BG"],
-            font=(FONT, 10),
+            font=BODY_FONT,
         )
         s.configure("TFrame", background=c["CARD"])
         s.configure("TLabel", background=c["CARD"], foreground=c["TEXT"])
         s.configure("TCheckbutton", background=c["CARD"], foreground=c["TEXT"])
 
-        s.configure("TNotebook", background=c["BG"], borderwidth=0)
+        s.configure(
+            "TNotebook",
+            background=c["BG"],
+            borderwidth=0,
+            tabmargins=(8, 6, 8, 0),
+        )
         s.configure(
             "TNotebook.Tab",
             background=c["CARD"],
             foreground=c["MUTED"],
-            padding=(14, 8),
+            padding=(18, 10),
             borderwidth=0,
+            font=ui_font(10, True),
         )
         s.map(
             "TNotebook.Tab",
@@ -283,7 +362,7 @@ def setup_ttk(root=None):
             foreground=c["TEXT_INPUT"],
             arrowcolor=c["TEXT"],
             bordercolor=c["BORDER"],
-            padding=4,
+            padding=5,
         )
         s.map(
             "TCombobox",
@@ -291,6 +370,7 @@ def setup_ttk(root=None):
             foreground=[("readonly", c["TEXT_INPUT"])],
             selectbackground=[("readonly", c["INPUT_BG"])],
             selectforeground=[("readonly", c["TEXT_INPUT"])],
+            bordercolor=[("focus", c["ACCENT"])],
         )
 
         s.configure(
@@ -306,52 +386,60 @@ def setup_ttk(root=None):
             root.option_add("*TCombobox*Listbox.foreground", c["TEXT_INPUT"])
             root.option_add("*TCombobox*Listbox.selectBackground", c["ACCENT"])
             root.option_add("*TCombobox*Listbox.selectForeground", c["ON_ACCENT"])
+            root.option_add("*TCombobox*Listbox.font", BODY_FONT)
     except tk.TclError:
         pass
 
 
 # ---------------------------------------------------------- widget helpers
 def make_button(parent, text, command=None, kind="primary", **options):
-    """Text-only button: no background, bold text.
+    """Themed button.
 
-    Text is white in the Dark theme and black in Light/Auto-light
-    (the theme's TEXT colour). On hover only the text turns accent colour.
-    `kind` is kept for compatibility; all buttons look the same.
+    kind="primary"   -> filled accent button (main action)
+    kind="secondary" -> soft grey button (cancel / close / small actions)
+    Both get a smooth hover colour.
     """
     c = THEMES[CURRENT_THEME]
 
-    # Button background = parent's background, so it looks transparent.
-    try:
-        parent_bg = str(parent.cget("bg"))
-    except (tk.TclError, AttributeError):
-        parent_bg = c["CARD"]
+    if kind == "secondary":
+        base, hover = "HOVER", "BORDER"
+        fg_token = "TEXT"
+    else:
+        base, hover = "ACCENT", "ACCENT_HOVER"
+        fg_token = "ON_ACCENT"
 
     config = dict(
         text=text,
         command=command,
         font=BUTTON_FONT,
-        bg=parent_bg,
-        fg=c["TEXT"],
-        activebackground=parent_bg,
-        activeforeground=c["ACCENT"],
+        bg=c[base],
+        fg=c[fg_token],
+        activebackground=c[hover],
+        activeforeground=c[fg_token],
         relief="flat",
         bd=0,
         highlightthickness=0,
         cursor="hand2",
-        padx=14,
-        pady=6,
+        padx=16,
+        pady=8,
     )
     config.update(options)
     button = tk.Button(parent, **config)
 
-    button.bind(
-        "<Enter>",
-        lambda e: button.configure(fg=THEMES[CURRENT_THEME]["ACCENT"]),
-    )
-    button.bind(
-        "<Leave>",
-        lambda e: button.configure(fg=THEMES[CURRENT_THEME]["TEXT"]),
-    )
+    def on_enter(_e):
+        try:
+            button.configure(bg=THEMES[CURRENT_THEME][hover])
+        except tk.TclError:
+            pass
+
+    def on_leave(_e):
+        try:
+            button.configure(bg=THEMES[CURRENT_THEME][base])
+        except tk.TclError:
+            pass
+
+    button.bind("<Enter>", on_enter)
+    button.bind("<Leave>", on_leave)
     return button
 
 
@@ -372,8 +460,37 @@ def make_entry(parent, **options):
     return tk.Entry(parent, **config)
 
 
+def focus_border(entry, wrap):
+    """Makes the border of `wrap` turn accent coloured while `entry` has focus."""
+    entry.bind(
+        "<FocusIn>",
+        lambda e: wrap.configure(highlightbackground=THEMES[CURRENT_THEME]["ACCENT"]),
+        add="+",
+    )
+    entry.bind(
+        "<FocusOut>",
+        lambda e: wrap.configure(highlightbackground=THEMES[CURRENT_THEME]["BORDER"]),
+        add="+",
+    )
+
+
+def hover_text(widget, normal_token="TEXT", hover_token="ACCENT"):
+    """Text colour changes to accent while the mouse is over `widget`."""
+    widget.bind(
+        "<Enter>",
+        lambda e: widget.configure(fg=THEMES[CURRENT_THEME][hover_token]),
+        add="+",
+    )
+    widget.bind(
+        "<Leave>",
+        lambda e: widget.configure(fg=THEMES[CURRENT_THEME][normal_token]),
+        add="+",
+    )
+
+
 # Initialise with the user's last saved choice (Auto by default).
 set_theme(load_preference())
+
 
 def center_window(win, width=None, height=None):
     win.update_idletasks()
@@ -394,7 +511,8 @@ def center_window(win, width=None, height=None):
     y = max((screen_h - height) // 2 - 20, 0)
 
     win.geometry(f"{width}x{height}+{x}+{y}")
-    
+
+
 def resource_path(filename):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, filename)
