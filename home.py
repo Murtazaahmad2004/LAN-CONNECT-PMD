@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 from discovery import CHAT_PORT, LANDiscovery
 import style
 import settings
+import netconfig
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -606,7 +607,7 @@ def home_page(user_email):
     style.save_preference(state["theme_mode"])
 
     win = tk.Tk()
-    win.title("LAN Connect")
+    win.title("NEXO LAN Messenger")
     style.center_window(win)
     win.configure(bg=style.BG)
     style.setup_ttk(win)
@@ -1353,6 +1354,25 @@ def home_page(user_email):
     )
     discovery.set_roster(registered_usernames)
 
+    def apply_network_config():
+        """Gives discovery the broadcast list and network tag chosen in
+        Settings -> Network.  Runs at start-up and after every Settings save."""
+        targets = netconfig.get_send_targets()
+        tag = netconfig.get_network_tag()
+        print(f"[NETWORK] Broadcast targets: {targets}  tag: {tag or '(none)'}")
+
+        setter = getattr(discovery, "set_broadcasts", None)
+        if not callable(setter):
+            print("[NETWORK] discovery.py has no set_broadcasts() yet - "
+                  "the Network settings are saved but not used for discovery.")
+            return
+        try:
+            setter(targets, tag)
+        except Exception as e:
+            print("[NETWORK] Could not apply network settings:", e)
+
+    apply_network_config()
+
     message_service = MessageService(
         username=local_username,
         on_message=on_incoming_message,
@@ -1475,6 +1495,7 @@ def home_page(user_email):
 
         apply_chat_fonts()      # font size changes live in the open chat
         check_spelling()        # spell checking on/off live
+        apply_network_config()  # new broadcasts / network tag take effect now
         render_users()
 
     def open_settings_window():
@@ -1565,7 +1586,7 @@ def home_page(user_email):
         if tray_icon is None:
             menu = pystray.Menu(
                 pystray.MenuItem(
-                    "Open LAN Connect",
+                    "Open NEXO LAN Messenger",
                     lambda icon, item: win.after(0, restore_window),
                     default=True
                 ),
@@ -1576,9 +1597,9 @@ def home_page(user_email):
             )
 
             tray_icon = pystray.Icon(
-                "LANConnect",
+                "NEXO LAN Messenger",
                 create_tray_image(),
-                "LAN Connect",
+                "NEXO LAN Messenger",
                 menu
             )
 
@@ -1652,7 +1673,7 @@ def home_page(user_email):
 
     render_users()
 
-    print("[HOME] LAN Connect started successfully.")
+    print("[HOME] NEXO LAN Messenger started successfully.")
 
     win.mainloop()
 
