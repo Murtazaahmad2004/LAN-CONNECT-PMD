@@ -6,7 +6,7 @@ The panel keeps the same blue brand colours in Light and Dark theme.
 import tkinter as tk
 from datetime import datetime
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 import style
 
@@ -39,12 +39,45 @@ def _blend(t):
     ))
 
 
-def _load_logo(max_height=110):
+LOGO_DIAMETER = 150     # size of the round logo badge
+LOGO_PADDING = 0.16     # empty space between circle edge and logo (fraction)
+
+
+def _circle_logo_image(diameter=LOGO_DIAMETER):
+    """Logo centred on a white circle (smooth edges). None if no logo file."""
     try:
-        img = Image.open(LOGO_PATH).convert("RGBA")
-        ratio = max_height / img.height
-        img = img.resize((int(img.width * ratio), max_height), Image.LANCZOS)
-        return ImageTk.PhotoImage(img)
+        logo = Image.open(LOGO_PATH).convert("RGBA")
+    except Exception:
+        return None
+
+    scale = 4                                   # draw big, shrink = smooth edge
+    big = diameter * scale
+
+    badge = Image.new("RGBA", (big, big), (255, 255, 255, 255))
+
+    inner = int(big * (1 - 2 * LOGO_PADDING))
+    ratio = min(inner / logo.width, inner / logo.height)
+    logo = logo.resize(
+        (max(1, int(logo.width * ratio)), max(1, int(logo.height * ratio))),
+        Image.LANCZOS,
+    )
+    badge.paste(
+        logo,
+        ((big - logo.width) // 2, (big - logo.height) // 2),
+        logo,
+    )
+
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, big - 1, big - 1), fill=255)
+    badge.putalpha(mask)
+
+    return badge.resize((diameter, diameter), Image.LANCZOS)
+
+
+def _load_logo():
+    try:
+        img = _circle_logo_image()
+        return ImageTk.PhotoImage(img) if img is not None else None
     except Exception:
         return None
 
@@ -84,26 +117,26 @@ def build_brand_panel(parent, panel_width):
         cx, cy = w // 2, h // 2
         y = max(24, cy - 190)
 
-        # --- logo (white card) or text badge
+        # --- round logo badge (or text badge if the logo file is missing)
+        d = LOGO_DIAMETER
+        y = max(24, cy - 215)
+
+        # soft ring around the circle
+        canvas.create_oval(cx - d // 2 - 8, y - 8, cx + d // 2 + 8, y + d + 8,
+                           outline=CIRCLE_COLOR, width=2)
         if logo:
-            box_w, box_h = logo.width() + 40, logo.height() + 40
-            canvas.create_rectangle(
-                cx - box_w // 2, y, cx + box_w // 2, y + box_h,
-                fill=WHITE, outline=""
-            )
-            canvas.create_image(cx, y + box_h // 2, image=logo)
-            y += box_h
+            canvas.create_image(cx, y + d // 2, image=logo)
         else:
-            canvas.create_oval(cx - 48, y, cx + 48, y + 96,
+            canvas.create_oval(cx - d // 2, y, cx + d // 2, y + d,
                                fill=WHITE, outline="")
-            canvas.create_text(cx, y + 48, text="PMD",
-                               font=style.ui_font(24, True),
+            canvas.create_text(cx, y + d // 2, text="PMD",
+                               font=style.ui_font(28, True),
                                fill=_hex(GRADIENT_TOP))
-            y += 96
+        y += d + 8
 
         # --- title and tagline
         y += 26
-        canvas.create_text(cx, y, text="LAN Connect", anchor="n",
+        canvas.create_text(cx, y, text="NEXO LAN Messenger", anchor="n",
                            font=style.ui_font(28, True), fill=WHITE)
         y += 48
         canvas.create_text(
@@ -127,7 +160,7 @@ def build_brand_panel(parent, panel_width):
 
         # --- footer
         canvas.create_text(
-            cx, h - 22, text=f"© {datetime.now().year}  PMD  ·  LAN Connect",
+            cx, h - 22, text=f"© {datetime.now().year}  PMD  ·  NEXO LAN Messenger",
             font=style.ui_font(9), fill=FOOTER_TEXT
         )
 

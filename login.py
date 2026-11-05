@@ -18,7 +18,7 @@ CARD_WIDTH = 340
 
 def show_login():
     win = tk.Tk()
-    win.title("LAN Connect - Login")
+    win.title("NEXO LAN Messenger - Login")
     style.center_window(win)
     win.minsize(760, 560)
     win.configure(bg=style.BG)

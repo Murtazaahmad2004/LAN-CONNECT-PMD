@@ -68,7 +68,7 @@ def open_register():
         return
 
     win = tk.Toplevel()
-    win.title("LAN Connect - Register")
+    win.title("NEXO LAN Messenger - Register")
     style.center_window(win)
     win.minsize(760, 640)
     win.configure(bg=style.BG)

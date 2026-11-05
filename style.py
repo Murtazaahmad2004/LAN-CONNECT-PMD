@@ -422,12 +422,15 @@ def make_button(parent, text, command=None, kind="primary", **options):
         cursor="hand2",
         padx=16,
         pady=8,
+        disabledforeground=c["MUTED"],
     )
     config.update(options)
     button = tk.Button(parent, **config)
 
     def on_enter(_e):
         try:
+            if str(button.cget("state")) == "disabled":
+                return
             button.configure(bg=THEMES[CURRENT_THEME][hover])
         except tk.TclError:
             pass
