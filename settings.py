@@ -9,6 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from contextlib import contextmanager
 import style
+import netconfig
 
 try:
     import winsound
@@ -542,12 +543,357 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     heading(tabs["Logging"], "Logging Settings")
     check(tabs["Logging"], "Enable application logging", "logging_enabled")
 
-    # Network
-    tab = tabs["Network"]; heading(tab, "Network Settings")
-    tk.Label(tab, text="Listening Port", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
-    port = style.make_entry(tab); port.insert(0, data["listening_port"])
-    port.pack(anchor="w", padx=25, pady=7, ipady=3)
-    check(tab, "Enable peer discovery", "discover_peers")
+    # ------------------------------------------------------------------
+    # Network tab: settings location, broadcasts, network tagging
+    # ------------------------------------------------------------------
+    tab = tabs["Network"]
+    heading(tab, "Network Settings")
+
+    net = netconfig.load_config()
+    own = {                                  # values used in "system-defined" mode
+        "broadcasts": list(net["broadcasts"]),
+        "include_system": net["include_system"],
+        "include_global": net["include_global"],
+        "tag_enabled": net["tag_enabled"],
+        "tag": net["tag"],
+    }
+    file_state = {"cfg": None, "path": net["file"]}
+    start_note = ""
+    if net["file"]:
+        try:
+            file_state["cfg"] = netconfig.read_settings_file(net["file"])
+        except ValueError:
+            if net["mode"] == "file":
+                start_note = "The saved settings file could not be loaded."
+
+    net_loc = tk.StringVar(
+        value="file" if net["mode"] == "file" and file_state["cfg"] else "system")
+    net_file = tk.StringVar(value=net["file"])
+    inc_sys = tk.BooleanVar(value=own["include_system"])
+    inc_glob = tk.BooleanVar(value=own["include_global"])
+
+    # ----- Network Settings Location -----
+    section(tab, "Network Settings Location")
+    radio(tab, "System-defined location (change settings below)", net_loc, "system",
+          command=lambda: on_location_changed())
+    radio(tab, "Load network settings from file (read-only):", net_loc, "file",
+          command=lambda: on_location_changed())
+
+    file_row = tk.Frame(tab, bg=style.BG)
+    file_row.pack(fill="x", padx=50, pady=(2, 0))
+    net_entry = style.make_entry(
+        file_row, textvariable=net_file, state="disabled",
+        disabledbackground=style.INPUT_BG, disabledforeground=style.MUTED,
+        readonlybackground=style.INPUT_BG)
+    net_entry.pack(side="left", fill="x", expand=True, ipady=3)
+    browse_btn = style.make_button(file_row, "...", lambda: browse_file(),
+                                   kind="secondary", width=3, pady=3,
+                                   font=style.SMALL_FONT)
+    browse_btn.pack(side="left", padx=(6, 25))
+    file_note = tk.Label(tab, text=start_note, bg=style.BG, fg=style.RED,
+                         font=style.SMALL_FONT)
+    if start_note:
+        file_note.pack(anchor="w", padx=50, after=file_row)
+
+    # ----- Connectivity -----
+    section(tab, "Connectivity")
+    tk.Label(tab, text="Broadcasts:", bg=style.BG, fg=style.WHITE).pack(
+        anchor="w", padx=28)
+
+    conn_row = tk.Frame(tab, bg=style.BG)
+    conn_row.pack(fill="x", padx=28, pady=(2, 4))
+
+    list_holder = tk.Frame(conn_row, bg=style.INPUT_BG, highlightthickness=1,
+                           highlightbackground=style.BORDER, height=104)
+    list_holder.pack(side="left", fill="x", expand=True)
+    list_holder.pack_propagate(False)
+    bc_list = tk.Listbox(list_holder, bg=style.INPUT_BG, fg=style.TEXT_INPUT, bd=0,
+                         highlightthickness=0, selectbackground=style.ACCENT,
+                         selectforeground=style.ON_ACCENT, activestyle="none",
+                         exportselection=False, font=style.INPUT_FONT)
+    bc_list.pack(fill="both", expand=True, padx=6, pady=4)
+    bc_hint = tk.Label(list_holder, bg=style.INPUT_BG, fg=style.MUTED)
+
+    btn_col = tk.Frame(conn_row, bg=style.BG)
+    btn_col.pack(side="left", fill="y", padx=(10, 0))
+    add_btn = style.make_button(btn_col, "Add...", lambda: add_broadcast(),
+                                kind="secondary", width=9, pady=4)
+    add_btn.pack(pady=(0, 6))
+    del_btn = style.make_button(btn_col, "Delete", lambda: delete_broadcast(),
+                                kind="secondary", width=9, pady=4)
+    del_btn.pack()
+    export_btn = style.make_button(btn_col, "Export...", lambda: export_network(),
+                                   kind="secondary", width=9, pady=4)
+    export_btn.pack(side="bottom")
+    bc_list.bind("<Delete>", lambda e: delete_broadcast())
+
+    def net_check(text, var):
+        cb = tk.Checkbutton(tab, text=text, variable=var,
+                            command=lambda: on_include_changed(),
+                            bg=style.BG, fg=style.WHITE, selectcolor=style.INPUT_BG,
+                            activebackground=style.BG, activeforeground=style.WHITE,
+                            disabledforeground=style.MUTED, highlightthickness=0)
+        cb.pack(anchor="w", padx=28, pady=1)
+        return cb
+
+    cb_sys = net_check("Include system-calculated broadcasts", inc_sys)
+    cb_glob = net_check("Include network-wide broadcast", inc_glob)
+
+    tag_row = tk.Frame(tab, bg=style.BG)
+    tag_row.pack(anchor="w", padx=28, pady=(4, 0))
+    tk.Label(tag_row, text="Network Tagging:", bg=style.BG,
+             fg=style.WHITE).pack(side="left")
+    tag_link = tk.Label(tag_row, text="Disabled", bg=style.BG, fg=style.ACCENT,
+                        cursor="hand2", font=(style.FONT, 10, "underline"))
+    tag_link.pack(side="left", padx=(6, 0))
+    tag_link.bind("<Button-1>", lambda e: edit_tag())
+
+    # ----- Chat port (kept from the old Network tab) -----
+    tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=(10, 0))
+    port_row = tk.Frame(tab, bg=style.BG)
+    port_row.pack(anchor="w", padx=28, pady=(8, 0))
+    tk.Label(port_row, text="Listening port:", bg=style.BG,
+             fg=style.WHITE).pack(side="left")
+    port = style.make_entry(port_row, width=8, justify="center")
+    port.insert(0, data["listening_port"])
+    port.pack(side="left", padx=8, ipady=2)
+    vars_["discover_peers"] = tk.BooleanVar(value=bool(data["discover_peers"]))
+    tk.Checkbutton(port_row, text="Enable peer discovery",
+                   variable=vars_["discover_peers"], bg=style.BG, fg=style.WHITE,
+                   selectcolor=style.INPUT_BG, activebackground=style.BG,
+                   activeforeground=style.WHITE, highlightthickness=0
+                   ).pack(side="left", padx=(20, 0))
+
+    # ----- Network tab behaviour -----
+    def view_cfg():
+        """(settings being shown, can the user edit them?)"""
+        if net_loc.get() == "file" and file_state["cfg"] is not None:
+            return file_state["cfg"], False
+        return own, True
+
+    def refresh_net_widgets():
+        cfg, editable = view_cfg()
+
+        net_entry.config(state="disabled" if editable else "readonly")
+        browse_btn.config(state="disabled" if editable else "normal")
+
+        bc_list.delete(0, "end")
+        for address in cfg["broadcasts"]:
+            bc_list.insert("end", address)
+
+        if cfg["broadcasts"]:
+            bc_hint.place_forget()
+        else:
+            if cfg["include_system"]:
+                hint = "Using system broadcasts."
+            elif cfg["include_global"]:
+                hint = "Using the network-wide broadcast only."
+            else:
+                hint = "No broadcasts selected."
+            bc_hint.config(text=hint)
+            bc_hint.place(relx=0.5, rely=0.5, anchor="center")
+
+        inc_sys.set(cfg["include_system"])
+        inc_glob.set(cfg["include_global"])
+
+        state = "normal" if editable else "disabled"
+        for widget in (cb_sys, cb_glob, add_btn, del_btn):
+            widget.config(state=state)
+
+        if cfg["tag_enabled"] and cfg["tag"]:
+            tag_link.config(text=f"Enabled ({cfg['tag']})")
+        else:
+            tag_link.config(text="Disabled")
+        tag_link.config(fg=style.ACCENT if editable else style.MUTED,
+                        cursor="hand2" if editable else "arrow")
+
+    def set_note(text):
+        file_note.config(text=text)
+        if text:
+            file_note.pack(anchor="w", padx=50, after=file_row)
+        else:
+            file_note.pack_forget()
+
+    def load_settings_file(path):
+        try:
+            cfg = netconfig.read_settings_file(path)
+        except ValueError as exc:
+            messagebox.showerror("Network Settings File", str(exc), parent=win)
+            return False
+        file_state["cfg"] = cfg
+        file_state["path"] = path
+        net_file.set(path)
+        set_note("")
+        return True
+
+    def browse_file():
+        path = filedialog.askopenfilename(
+            parent=win, title="Load network settings",
+            filetypes=[("Network settings", "*.json"), ("All files", "*.*")])
+        if not path or not load_settings_file(path):
+            return False
+        net_loc.set("file")
+        refresh_net_widgets()
+        return True
+
+    def on_location_changed():
+        if net_loc.get() == "file" and file_state["cfg"] is None:
+            if not browse_file():
+                net_loc.set("system")
+        refresh_net_widgets()
+
+    def on_include_changed():
+        own["include_system"] = bool(inc_sys.get())
+        own["include_global"] = bool(inc_glob.get())
+        refresh_net_widgets()
+
+    def make_dialog(title, width, height):
+        dlg = tk.Toplevel(win)
+        dlg.title(title)
+        dlg.configure(bg=style.BG)
+        dlg.transient(win)
+        style.center_window(dlg, width, height)
+        dlg.resizable(False, False)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        return dlg
+
+    def grab(dlg):
+        try:
+            dlg.grab_set()           # modal; skipped if the window is not shown yet
+        except tk.TclError:
+            pass
+
+    def add_broadcast():
+        if not view_cfg()[1]:
+            return
+        dlg = make_dialog("Add Broadcast", 440, 300)
+        btns = tk.Frame(dlg, bg=style.BG)
+        btns.pack(side="bottom", fill="x", padx=18, pady=14)
+
+        tk.Label(dlg, text="Add Broadcast", font=style.ui_font(14, True),
+                 bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=18, pady=(14, 4))
+        tk.Label(dlg, text="Enter a broadcast address (for example 192.168.1.255)\n"
+                           "or a subnet (for example 192.168.1.0/24).",
+                 justify="left", bg=style.BG, fg=style.MUTED).pack(anchor="w", padx=18)
+        value = tk.StringVar()
+        entry = style.make_entry(dlg, textvariable=value)
+        entry.pack(fill="x", padx=18, pady=(12, 0), ipady=4)
+        error = tk.Label(dlg, text="", bg=style.BG, fg=style.RED, justify="left",
+                         wraplength=400)
+        error.pack(anchor="w", padx=18, pady=(6, 0))
+        entry.bind("<Key>", lambda e: error.config(text=""), add="+")
+
+        def ok(_event=None):
+            try:
+                address = netconfig.parse_broadcast(value.get())
+            except ValueError as exc:
+                error.config(text=str(exc))
+                return
+            if address in own["broadcasts"]:
+                error.config(text="That broadcast is already in the list.")
+                return
+            own["broadcasts"].append(address)
+            dlg.destroy()
+            refresh_net_widgets()
+            bc_list.selection_set("end")
+            bc_list.see("end")
+
+        entry.bind("<Return>", ok)
+        style.make_button(btns, "OK", ok, kind="primary", width=10).pack(side="right", padx=(6, 0))
+        style.make_button(btns, "Cancel", dlg.destroy, kind="secondary",
+                          width=10).pack(side="right")
+        grab(dlg)
+        entry.focus_set()
+
+    def delete_broadcast():
+        if not view_cfg()[1]:
+            return
+        selection = bc_list.curselection()
+        if not selection:
+            messagebox.showinfo("Delete", "Select a broadcast in the list first.",
+                                parent=win)
+            return
+        del own["broadcasts"][selection[0]]
+        refresh_net_widgets()
+
+    def export_network():
+        cfg, _editable = view_cfg()
+        path = filedialog.asksaveasfilename(
+            parent=win, title="Export network settings",
+            defaultextension=".json", initialfile="network_settings.json",
+            filetypes=[("Network settings", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            netconfig.export_settings_file(path, cfg)
+        except OSError as exc:
+            messagebox.showerror("Export Failed",
+                                 f"Could not write the file:\n{exc.strerror or exc}",
+                                 parent=win)
+            return
+        messagebox.showinfo("Exported", f"Network settings were saved to:\n{path}",
+                            parent=win)
+
+    def edit_tag():
+        if not view_cfg()[1]:
+            return
+        dlg = make_dialog("Network Tagging", 470, 340)
+        btns = tk.Frame(dlg, bg=style.BG)
+        btns.pack(side="bottom", fill="x", padx=18, pady=14)
+
+        tk.Label(dlg, text="Network Tagging", font=style.ui_font(14, True),
+                 bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=18, pady=(14, 4))
+        tk.Label(dlg, text="Tagging splits one network into separate groups. Only "
+                           "people who use the same tag can see each other, so "
+                           "everyone in the group must enter exactly the same tag.",
+                 justify="left", wraplength=430, bg=style.BG,
+                 fg=style.MUTED).pack(anchor="w", padx=18)
+
+        enabled = tk.BooleanVar(value=own["tag_enabled"])
+        text = tk.StringVar(value=own["tag"])
+        entry = style.make_entry(dlg, textvariable=text,
+                                 disabledbackground=style.INPUT_BG,
+                                 disabledforeground=style.MUTED)
+
+        def sync():
+            entry.config(state="normal" if enabled.get() else "disabled")
+
+        tk.Checkbutton(dlg, text="Enable network tagging", variable=enabled,
+                       command=sync, bg=style.BG, fg=style.WHITE,
+                       selectcolor=style.INPUT_BG, activebackground=style.BG,
+                       activeforeground=style.WHITE, highlightthickness=0
+                       ).pack(anchor="w", padx=18, pady=(12, 4))
+        tk.Label(dlg, text="Tag:", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=18)
+        entry.pack(fill="x", padx=18, pady=(2, 0), ipady=4)
+        error = tk.Label(dlg, text="", bg=style.BG, fg=style.RED, justify="left",
+                         wraplength=430)
+        error.pack(anchor="w", padx=18, pady=(6, 0))
+        entry.bind("<Key>", lambda e: error.config(text=""), add="+")
+        sync()
+
+        def ok(_event=None):
+            try:
+                tag = netconfig.clean_tag(text.get())
+            except ValueError as exc:
+                error.config(text=str(exc))
+                return
+            if enabled.get() and not tag:
+                error.config(text="Enter a tag, or untick 'Enable network tagging'.")
+                return
+            own["tag"] = tag
+            own["tag_enabled"] = bool(enabled.get() and tag)
+            dlg.destroy()
+            refresh_net_widgets()
+
+        entry.bind("<Return>", ok)
+        style.make_button(btns, "OK", ok, kind="primary", width=10).pack(side="right", padx=(6, 0))
+        style.make_button(btns, "Cancel", dlg.destroy, kind="secondary",
+                          width=10).pack(side="right")
+        grab(dlg)
+        if enabled.get():
+            entry.focus_set()
+
+    refresh_net_widgets()
 
     # File transfer
     tab = tabs["File Transfer"]; heading(tab, "File Transfer Settings")
@@ -580,6 +926,19 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
                 "Repeat sound interval must be a whole number of seconds "
                 "between 1 and 3600.", parent=win)
             return
+        file_mode = net_loc.get() == "file"
+        if file_mode and file_state["cfg"] is None:
+            messagebox.showerror("Network Settings",
+                "Choose a valid network settings file, or select the "
+                "system-defined location.", parent=win)
+            return
+        if not file_mode and not (own["broadcasts"] or own["include_system"]
+                                  or own["include_global"]):
+            messagebox.showerror("No Broadcasts",
+                "Add at least one broadcast, or tick one of the two 'Include' "
+                "options. Without a broadcast the app cannot find other users.",
+                parent=win)
+            return
         new = {k: int(v.get()) for k, v in vars_.items()}
         new["inactive_minutes"] = int(minutes)
         new.update(theme=theme.get(), language=language.get(),
@@ -595,6 +954,14 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
             save_settings(user_email, new)
         except Exception as exc:
             messagebox.showerror("Save Error", str(exc), parent=win)
+            return
+        try:
+            netconfig.save_config({"mode": "file" if file_mode else "system",
+                                   "file": file_state["path"], **own})
+        except OSError as exc:
+            messagebox.showerror("Save Error",
+                f"Could not save the network settings:\n{exc.strerror or exc}",
+                parent=win)
             return
         if on_save:
             on_save(new)

@@ -4,6 +4,8 @@ import threading
 import uuid
 import time
 
+import netconfig
+
 DISCOVERY_PORT = 37020
 CHAT_PORT = 37021
 
@@ -39,6 +41,53 @@ class LANDiscovery:
         self._last_timeout_check = 0
 
         self.roster = []
+
+        # Where our packets are sent and which network tag we use.
+        # home.py sets both from Settings -> Network (see set_broadcasts).
+        self.targets = [netconfig.GLOBAL_BROADCAST]
+        self.network_tag = ""
+        self._send_errors = {}
+
+    def set_broadcasts(self, targets, tag=""):
+        """Sets the broadcast addresses we send to and the network tag.
+
+        targets: list of IPv4 broadcast addresses. Invalid ones are skipped;
+                 an empty list means the network-wide broadcast.
+        tag:     "" = no tagging. Otherwise only computers that use the same
+                 tag are shown (and see us).
+        """
+        clean = []
+        for item in targets or []:
+            try:
+                address = netconfig.parse_broadcast(str(item))
+            except ValueError:
+                continue
+            if address not in clean:
+                clean.append(address)
+
+        if not clean:
+            clean = [netconfig.GLOBAL_BROADCAST]
+
+        try:
+            new_tag = netconfig.clean_tag(tag)
+        except ValueError:
+            new_tag = ""
+
+        tag_changed = new_tag != self.network_tag
+
+        self.targets = clean
+        self.network_tag = new_tag
+        self._send_errors = {}
+
+        if tag_changed:
+            # Computers seen under the old tag must not stay in the list
+            with self.lock:
+                self.users.clear()
+            self._notify_update()
+
+        # Tell the other computers now, not at the next heartbeat
+        if self.running:
+            self._broadcast_once()
 
     def set_roster(self, names):
         self.roster = [
@@ -99,8 +148,27 @@ class LANDiscovery:
             "username": self.username,
             "port": CHAT_PORT,
             "status": self.status,
-            "roster": self.roster
+            "roster": self.roster,
+            "tag": self.network_tag
         }
+
+    def _send_packet(self, sock):
+        """Sends our packet to every broadcast address. One address that
+        fails (e.g. no route) does not stop the others."""
+        data = json.dumps(self._make_packet()).encode("utf-8")
+
+        for address in list(self.targets):
+            try:
+                sock.sendto(data, (address, DISCOVERY_PORT))
+                self._send_errors.pop(address, None)
+            except OSError as error:
+                if not self.running:
+                    continue
+
+                # Print each problem once, not every few seconds
+                if self._send_errors.get(address) != str(error):
+                    self._send_errors[address] = str(error)
+                    print(f"Broadcast error ({address}):", error)
 
     def _broadcast_once(self):
         sock = socket.socket(
@@ -115,10 +183,7 @@ class LANDiscovery:
                 1
             )
 
-            sock.sendto(
-                json.dumps(self._make_packet()).encode("utf-8"),
-                ("255.255.255.255", DISCOVERY_PORT)
-            )
+            self._send_packet(sock)
         except OSError as error:
             print("Broadcast error:", error)
         finally:
@@ -138,15 +203,7 @@ class LANDiscovery:
 
         try:
             while self.running:
-                try:
-                    sock.sendto(
-                        json.dumps(self._make_packet()).encode("utf-8"),
-                        ("255.255.255.255", DISCOVERY_PORT)
-                    )
-                except OSError as error:
-                    if self.running:
-                        print("Broadcast error:", error)
-
+                self._send_packet(sock)
                 time.sleep(BROADCAST_INTERVAL)
         finally:
             sock.close()
@@ -200,6 +257,13 @@ class LANDiscovery:
                         continue
 
                     if instance_id == INSTANCE_ID:
+                        continue
+
+                    # Only computers with the same network tag see each other
+                    packet_tag = packet.get("tag", "")
+                    if not isinstance(packet_tag, str):
+                        packet_tag = ""
+                    if packet_tag != self.network_tag:
                         continue
 
                     if (
