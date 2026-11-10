@@ -112,7 +112,7 @@ class LANDiscovery:
         ).start()
 
     def set_status(self, status):
-        if status not in ("Online", "Inactive", "Offline"):
+        if status not in ("Online", "Busy", "Inactive", "Offline"):
             return
 
         if self.status != status:
@@ -274,6 +274,7 @@ class LANDiscovery:
 
                     if status not in (
                         "Online",
+                        "Busy",
                         "Inactive",
                         "Offline"
                     ):

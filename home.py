@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 import uuid
 from datetime import datetime, timezone
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import pystray
 from PIL import Image, ImageDraw
@@ -18,6 +18,8 @@ from discovery import CHAT_PORT, LANDiscovery
 import style
 import settings
 import netconfig
+import filestore
+import filetransfer
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -128,10 +130,11 @@ def get_registered_usernames():
 
 class MessageService:
 
-    def __init__(self, username, on_message, find_peer):
+    def __init__(self, username, on_message, find_peer, on_file=None):
         self.username = username
         self.on_message = on_message
         self.find_peer = find_peer
+        self.on_file = on_file          # on_file(conn, header, leftover)
         self.running = False
         self.server = None
 
@@ -226,13 +229,23 @@ class MessageService:
             raw_message = data.split(b"\n", 1)[0]
             msg = json.loads(raw_message.decode("utf-8"))
 
-            if msg.get("type") != "chat":
+            if msg.get("type") not in ("chat", "file"):
                 return
 
             if msg.get("to") != self.username:
                 # Message is for another copy of the app on this PC.
                 # We answer "NO" (in finally) so the sender tries the next port.
                 print("[CHAT] Message receiver does not match.")
+                return
+
+            if msg.get("type") == "file":
+                # The file code answers the sender itself (OK / DECLINED ...)
+                accepted = True
+                if self.on_file is None:
+                    conn.sendall(b"NO\n")
+                    return
+                leftover = data.split(b"\n", 1)[1]
+                self.on_file(conn, msg, leftover)
                 return
 
             sender = str(msg.get("from", "")).strip()
@@ -329,6 +342,22 @@ class MessageService:
 
         print(f"[CHAT] Could not send message to {receiver}")
         return False
+
+    def send_file(self, receiver, path, tracker=None):
+        """Sends one file. Returns (status, detail, id), see filetransfer."""
+        peer = self.find_peer(receiver)
+
+        if not peer:
+            return "offline", "The other user is offline.", ""
+
+        ip, port = peer
+        ports = [port] + [
+            p for p in range(CHAT_PORT, CHAT_PORT + PORT_TRIES)
+            if p != port
+        ]
+        return filetransfer.send_file(
+            ip, ports, self.username, receiver, path, tracker
+        )
 
     def stop(self):
         self.running = False
@@ -550,6 +579,116 @@ class ChatView(tk.Frame):
         self.after_idle(self.scroll_to_end)
 
 
+class TransferWindow:
+    """Small progress window for one file being sent or received.
+
+    Used as the "tracker" of filetransfer.py: update() and close() may be
+    called from any thread; `cancelled` becomes True after the Cancel button.
+    """
+
+    def __init__(self, parent, title, name, total):
+        self._cancel = threading.Event()
+        self._total = max(1, total)
+        self._last = -1
+        self.top = tk.Toplevel(parent)
+        self.top.title(title)
+        self.top.configure(bg=style.BG)
+        self.top.resizable(False, False)
+        style.center_window(self.top, 420, 170)
+
+        tk.Label(self.top, text=title, font=style.ui_font(11, True),
+                 bg=style.BG, fg=style.WHITE).pack(
+                     anchor="w", padx=18, pady=(14, 0))
+        tk.Label(self.top, text=f"{name}  ({filetransfer.human_size(total)})",
+                 bg=style.BG, fg=style.MUTED).pack(anchor="w", padx=18)
+
+        self.bar = ttk.Progressbar(self.top, maximum=100, length=380)
+        self.bar.pack(padx=18, pady=(12, 4))
+        self.info = tk.Label(self.top, text="Starting...", bg=style.BG,
+                             fg=style.MUTED)
+        self.info.pack(anchor="w", padx=18)
+
+        style.make_button(self.top, "Cancel", self._cancel.set,
+                          kind="secondary", width=10).pack(
+                              side="right", padx=18, pady=10)
+        self.top.protocol("WM_DELETE_WINDOW", self._cancel.set)
+
+    @property
+    def cancelled(self):
+        return self._cancel.is_set()
+
+    def update(self, done, total=None):
+        percent = int(done * 100 / self._total)
+        if percent == self._last:
+            return
+        self._last = percent
+
+        def apply():
+            try:
+                self.bar["value"] = percent
+                self.info.config(
+                    text=f"{percent}%   {filetransfer.human_size(done)} of "
+                         f"{filetransfer.human_size(self._total)}")
+            except tk.TclError:
+                pass
+
+        try:
+            self.top.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            pass
+
+    def close(self):
+        def destroy():
+            try:
+                self.top.destroy()
+            except tk.TclError:
+                pass
+
+        try:
+            self.top.after(0, destroy)
+        except (tk.TclError, RuntimeError):
+            pass
+
+
+def show_image_preview(parent, sender, path):
+    """'Show previews of incoming images': a window with the picture."""
+    try:
+        from PIL import ImageTk
+        picture = Image.open(path)
+        picture.thumbnail((480, 360))
+        photo = ImageTk.PhotoImage(picture)
+    except Exception as error:
+        print("[FILE] No preview:", error)
+        return None
+
+    top = tk.Toplevel(parent)
+    top.title(f"Image from {sender}")
+    top.configure(bg=style.BG)
+
+    tk.Label(top, text=f"{sender} sent you  {os.path.basename(path)}",
+             font=style.ui_font(10, True), bg=style.BG,
+             fg=style.WHITE).pack(padx=16, pady=(12, 6))
+
+    label = tk.Label(top, image=photo, bg=style.BG, cursor="hand2")
+    label.image = photo                       # keep a reference
+    label.pack(padx=16, pady=4)
+    label.bind("<Button-1>", lambda e: filestore.open_file(path))
+
+    buttons = tk.Frame(top, bg=style.BG)
+    buttons.pack(fill="x", padx=16, pady=12)
+    style.make_button(buttons, "Close", top.destroy, kind="secondary",
+                      width=10).pack(side="right", padx=4)
+    style.make_button(
+        buttons, "Show folder",
+        lambda: filestore.open_folder(os.path.dirname(path)),
+        kind="secondary", width=12).pack(side="right", padx=4)
+    style.make_button(buttons, "Open", lambda: filestore.open_file(path),
+                      kind="primary", width=10).pack(side="right", padx=4)
+
+    top.lift()
+    return top
+
+
 def home_page(user_email):
 
     user_settings = settings.load_settings(user_email)
@@ -568,6 +707,9 @@ def home_page(user_email):
         "hide_away_users": bool(
             user_settings.get("hide_away_users", 0)
         ),
+        # Set from the tray menu: None = automatic (Available), or
+        # "Busy" / "Away" = kept until the user picks another one
+        "manual_status": None,
         # ---- Messaging tab settings ----
         "message_mode": user_settings.get("message_mode", "conversation"),
         "display_recent_messages": bool(
@@ -626,6 +768,7 @@ def home_page(user_email):
             (user_email,)
         )
         logged_in_user = cursor.fetchone()
+        cursor.close()      # a half-read SELECT would keep the database locked
     finally:
         conn.close()
 
@@ -721,6 +864,7 @@ def home_page(user_email):
 
     STATUS_COLORS = {
         "Online": style.STATUS_ONLINE,
+        "Busy": style.RED,
         "Inactive": style.STATUS_INACTIVE,
         "Offline": style.STATUS_OFFLINE,
     }
@@ -903,6 +1047,13 @@ def home_page(user_email):
         if state["repeat_sound"] and not was_active:
             start_repeat(sender)
 
+    def incoming_file_sound(sender, was_active):
+        """Sound for a received file (Sound Events -> Incoming file)."""
+        if state["sound_when"] == "background" and was_active:
+            return
+
+        play_event_sound("file")
+
     def open_user_chat(peer_username):
         active_chat["username"] = peer_username
         stop_repeat(peer_username)
@@ -1077,6 +1228,22 @@ def home_page(user_email):
         quick_btn.config(menu=quick_menu)
         quick_btn.pack(side="right", padx=4)
 
+        attach_btn = tk.Button(
+            bottom_frame,
+            text="📎 Attach",
+            font=style.ui_font(10, True),
+            bg=style.CARD,
+            fg=style.WHITE,
+            activebackground=style.CARD,
+            activeforeground=style.ACCENT,
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            command=attach_files
+        )
+        attach_btn.pack(side="right", padx=4)
+        style.hover_text(attach_btn)
+
         # ---- Enter key behaviour ("Press Enter to send messages") ----
         def handle_enter(event):
             shift = bool(event.state & 0x1)
@@ -1182,7 +1349,225 @@ def home_page(user_email):
             except tk.TclError:
                 pass
 
-    def on_incoming_message(sender, message, uid=None):
+    # ------------------------------------------------------------------
+    # File transfer (Settings -> File Transfer decides what happens)
+    # ------------------------------------------------------------------
+    def run_in_main(fn, timeout=10):
+        """Runs fn() in the window thread and returns its result (for
+        use from the network threads)."""
+        box = {}
+        finished = threading.Event()
+
+        def runner():
+            try:
+                box["value"] = fn()
+            except Exception as e:
+                print("[UI] Error:", e)
+            finally:
+                finished.set()
+
+        try:
+            win.after(0, runner)
+        except (tk.TclError, RuntimeError):
+            return None
+
+        finished.wait(timeout)
+        return box.get("value")
+
+    def ask_file_permission(sender, name, size):
+        """'Ask for permission first': True = accept.  Called from the
+        network thread, waits for the user (no answer in 2 min = decline)."""
+        answered = threading.Event()
+        result = {"ok": False}
+        box = {}
+
+        def finish(ok):
+            if answered.is_set():
+                return
+            result["ok"] = ok
+            answered.set()
+            try:
+                box["pop"].destroy()
+            except (KeyError, tk.TclError):
+                pass
+
+        def build():
+            if win.state() == "withdrawn":
+                stop_tray()
+                win.deiconify()
+
+            pop = tk.Toplevel(win)
+            box["pop"] = pop
+            pop.title("Incoming file")
+            pop.configure(bg=style.BG)
+            style.center_window(pop, 420, 210)
+
+            tk.Label(pop, text=f"{sender} wants to send you a file",
+                     font=style.ui_font(12, True), bg=style.BG,
+                     fg=style.WHITE).pack(anchor="w", padx=18, pady=(16, 6))
+            tk.Label(pop, text=name, font=style.ui_font(11), bg=style.BG,
+                     fg=style.ACCENT, wraplength=380,
+                     justify="left").pack(anchor="w", padx=18)
+            tk.Label(pop, text=filetransfer.human_size(size), bg=style.BG,
+                     fg=style.MUTED).pack(anchor="w", padx=18, pady=(2, 0))
+
+            buttons = tk.Frame(pop, bg=style.BG)
+            buttons.pack(side="bottom", fill="x", padx=18, pady=14)
+            style.make_button(buttons, "Decline", lambda: finish(False),
+                              kind="secondary", width=10
+                              ).pack(side="right", padx=4)
+            style.make_button(buttons, "Accept", lambda: finish(True),
+                              kind="primary", width=10
+                              ).pack(side="right", padx=4)
+
+            pop.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+            pop.after(filetransfer.ASK_TIMEOUT * 1000, lambda: finish(False))
+            pop.lift()
+            pop.attributes("-topmost", True)
+            pop.after(300, lambda: pop.attributes("-topmost", False))
+
+        run_in_main(build)
+        answered.wait(filetransfer.ASK_TIMEOUT + 5)
+        finish(False)                        # no answer = decline
+        return result["ok"]
+
+    def handle_incoming_file(conn, header, leftover):
+        """Called by MessageService when another user sends us a file."""
+        cfg = settings.load_settings(user_email)
+        stamp = datetime.now()
+
+        def decide(sender, name, size):
+            if not filestore.wants_permission(cfg):
+                return True
+            return ask_file_permission(sender, name, size)
+
+        def resolve(sender, name, create):
+            return filestore.resolve(
+                cfg, local_username, sender, name,
+                stamp=stamp, create=create
+            )
+
+        def begin(sender, name, size):
+            return run_in_main(lambda: TransferWindow(
+                win, f"Receiving from {sender}", name, size
+            ))
+
+        saved = filetransfer.receive_file(
+            conn, header, leftover, decide, resolve, begin
+        )
+
+        if not saved:
+            return
+
+        print(f"[FILE] Received {saved['name']} from {saved['sender']} "
+              f"-> {saved['path']}")
+
+        text = (
+            f"📎 {saved['name']} ({filetransfer.human_size(saved['size'])})"
+            f"\nSaved to: {os.path.dirname(saved['path'])}"
+        )
+        on_incoming_message(
+            saved["sender"], text, saved["id"] or None, kind="file"
+        )
+
+        if filestore.is_image(saved["name"]) and filestore.wants_preview(cfg):
+            try:
+                win.after(0, lambda: show_image_preview(
+                    win, saved["sender"], saved["path"]
+                ))
+            except (tk.TclError, RuntimeError):
+                pass
+
+    def send_files_worker(receiver, paths):
+        problems = []
+
+        for path in paths:
+            name = os.path.basename(path)
+
+            try:
+                size = os.path.getsize(path)
+            except OSError as e:
+                problems.append(f"{name}: cannot read the file ({e})")
+                continue
+
+            tracker = run_in_main(lambda: TransferWindow(
+                win, f"Sending to {receiver}", name, size
+            ))
+            status, detail, uid = message_service.send_file(
+                receiver, path, tracker
+            )
+            if tracker is not None:
+                tracker.close()
+
+            if status == "sent":
+                text = f"📎 {name} ({filetransfer.human_size(size)})"
+                try:
+                    save_message(local_username, receiver, text, uid)
+                except sqlite3.Error as e:
+                    print("[DATABASE] File message save error:", e)
+
+                def show(r=receiver, t=text):
+                    if active_chat["username"] == r:
+                        append_message(local_username, t)
+
+                try:
+                    win.after(0, show)
+                except (tk.TclError, RuntimeError):
+                    return
+                continue
+
+            if status == "cancelled":
+                problems.append(f"{name}: cancelled")
+                break
+
+            reasons = {
+                "declined": f"{receiver} declined the file.",
+                "skipped": f"{receiver} already has a file with this name "
+                           "(their setting skips existing files).",
+            }
+            problems.append(f"{name}: {reasons.get(status, detail)}")
+
+        if problems:
+            try:
+                win.after(0, lambda: messagebox.showwarning(
+                    "File Transfer", "\n".join(problems), parent=win
+                ))
+            except (tk.TclError, RuntimeError):
+                pass
+
+    def attach_files():
+        receiver = active_chat["username"]
+
+        if not receiver:
+            return
+
+        if message_service is None:
+            messagebox.showerror("File Transfer",
+                                 "Message service is not running.", parent=win)
+            return
+
+        if not find_peer(receiver):
+            messagebox.showwarning(
+                "File Transfer",
+                f"{receiver} is offline.\n\nFiles can only be sent to users "
+                "who are online on the same LAN.",
+                parent=win
+            )
+            return
+
+        paths = filedialog.askopenfilenames(
+            parent=win, title=f"Send files to {receiver}"
+        )
+
+        if paths:
+            threading.Thread(
+                target=send_files_worker,
+                args=(receiver, list(paths)),
+                daemon=True
+            ).start()
+
+    def on_incoming_message(sender, message, uid=None, kind="message"):
+        play_sound = incoming_file_sound if kind == "file" else incoming_sound
         print(
             f"[HOME] Incoming message from {sender}: {message}"
         )
@@ -1207,7 +1592,7 @@ def home_page(user_email):
 
                 if state["message_mode"] == "single":
                     show_single_popup(sender, message)
-                    incoming_sound(sender, was_active)
+                    play_sound(sender, was_active)
                     return
 
                 if active_chat["username"] == sender:
@@ -1217,7 +1602,7 @@ def home_page(user_email):
                     render_users()
 
                 notify_incoming(sender)
-                incoming_sound(sender, was_active)
+                play_sound(sender, was_active)
 
             except tk.TclError as e:
                 print("[UI] Incoming message UI error:", e)
@@ -1255,8 +1640,9 @@ def home_page(user_email):
 
         status_order = {
             "Online": 0,
-            "Inactive": 1,
-            "Offline": 2
+            "Busy": 1,
+            "Inactive": 2,
+            "Offline": 3
         }
 
         sorted_users = sorted(
@@ -1264,7 +1650,7 @@ def home_page(user_email):
             key=lambda user: (
                 status_order.get(
                     user.get("status", "Offline"),
-                    2
+                    3
                 ),
                 user["username"].lower()
             )
@@ -1376,7 +1762,8 @@ def home_page(user_email):
     message_service = MessageService(
         username=local_username,
         on_message=on_incoming_message,
-        find_peer=find_peer
+        find_peer=find_peer,
+        on_file=handle_incoming_file
     )
 
     chat_started = message_service.start()
@@ -1394,6 +1781,9 @@ def home_page(user_email):
 
         last_activity = time.monotonic()
 
+        if state["manual_status"]:      # Busy / Away chosen by the user
+            return
+
         if discovery.status != "Online":
             discovery.set_status("Online")
 
@@ -1404,6 +1794,10 @@ def home_page(user_email):
             if not win.winfo_exists():
                 return
         except tk.TclError:
+            return
+
+        if state["manual_status"]:      # the user chose Busy / Away
+            status_after_id = win.after(1000, check_status)
             return
 
         now = time.monotonic()
@@ -1498,6 +1892,18 @@ def home_page(user_email):
         apply_network_config()  # new broadcasts / network tag take effect now
         render_users()
 
+    def open_received_files_folder():
+        """'Received Files' opens the folder chosen in Settings -> File Transfer."""
+        cfg = settings.load_settings(user_email)
+        target = filestore.base_folder(cfg, local_username)
+
+        if not filestore.open_folder(target):
+            messagebox.showerror(
+                "Received Files",
+                f"Could not open the incoming files folder:\n{target}",
+                parent=win
+            )
+
     def open_settings_window():
         settings.open_settings(
             user_email=user_email,
@@ -1578,29 +1984,97 @@ def home_page(user_email):
         shutdown()
         win.destroy()
 
+    # ------------------------------------------------------------------
+    # System tray menu:  Restore / Start Conversation / status / Exit
+    # ------------------------------------------------------------------
+    STATUS_CHOICES = {"Available": "Online", "Busy": "Busy", "Away": "Inactive"}
+
+    def tray_choice():
+        return state["manual_status"] or "Available"
+
+    def apply_manual_status(choice):
+        """Available = automatic again; Busy / Away stay until changed."""
+        state["manual_status"] = None if choice == "Available" else choice
+
+        if choice == "Available":
+            mark_activity()
+        else:
+            discovery.set_status(STATUS_CHOICES[choice])
+
+    def start_conversation_from_tray(name):
+        def go():
+            restore_window()
+            open_user_chat(name)
+
+        win.after(0, go)
+
+    def tray_user_items():
+        """The 'Start Conversation' list: everyone who is online now."""
+        people = {}
+        for user in discovery.get_users():
+            name = user.get("username")
+            status = user.get("status", "Offline")
+            if name and name != local_username and status != "Offline":
+                people[name] = status
+
+        if not people:
+            return (pystray.MenuItem("No users online", None, enabled=False),)
+
+        def make(name):
+            label = name.replace("&", "&&")
+            if people[name] == "Busy":
+                label += "  (Busy)"
+            elif people[name] == "Inactive":
+                label += "  (Away)"
+            return pystray.MenuItem(
+                label,
+                lambda icon, item: start_conversation_from_tray(name)
+            )
+
+        return tuple(make(n) for n in sorted(people, key=str.lower))
+
+    def tray_status_item(choice):
+        return pystray.MenuItem(
+            choice,
+            lambda icon, item: win.after(0, lambda: apply_manual_status(choice)),
+            checked=lambda item: tray_choice() == choice,
+            radio=True
+        )
+
+    def build_tray_menu():
+        return pystray.Menu(
+            pystray.MenuItem(
+                "Restore",
+                lambda icon, item: win.after(0, restore_window),
+                default=True
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Start Conversation",
+                pystray.Menu(tray_user_items)
+            ),
+            pystray.Menu.SEPARATOR,
+            tray_status_item("Available"),
+            tray_status_item("Busy"),
+            tray_status_item("Away"),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Exit",
+                lambda icon, item: win.after(0, exit_app)
+            )
+        )
+
     def hide_to_tray():
         nonlocal tray_icon
 
         win.withdraw()
 
         if tray_icon is None:
-            menu = pystray.Menu(
-                pystray.MenuItem(
-                    "Open NEXO LAN Messenger",
-                    lambda icon, item: win.after(0, restore_window),
-                    default=True
-                ),
-                pystray.MenuItem(
-                    "Exit",
-                    lambda icon, item: win.after(0, exit_app)
-                )
-            )
-
             tray_icon = pystray.Icon(
                 "NEXO LAN Messenger",
                 create_tray_image(),
                 "NEXO LAN Messenger",
-                menu
+                build_tray_menu()
             )
 
             tray_icon.run_detached()
@@ -1614,7 +2088,7 @@ def home_page(user_email):
 
     menu_items = [
         ("⚙", "Settings", open_settings_window),
-        ("📥", "Received Files", open_received_files),
+        ("📥", "Received Files", open_received_files_folder),
         ("💬", "Message History", open_message_history),
         ("❓", "Help", open_help),
         ("ⓘ", "About", open_about),

@@ -10,6 +10,7 @@ from pathlib import Path
 from contextlib import contextmanager
 import style
 import netconfig
+import filestore
 
 try:
     import winsound
@@ -51,6 +52,14 @@ DEFAULTS = {
     "sound_incoming_file": 1,
     "sound_incoming_call": 1,
     "sound_tune": "Classic Bell",            # notification tune for messages
+    # ---- File Transfer tab ("download_folder" = the custom folder) ----
+    "file_accept": "auto",                   # "auto" or "ask"
+    "show_image_previews": 1,
+    "incoming_location": "system",           # "system" or "custom"
+    "custom_user_subfolder": 0,
+    "save_mode": "per_transfer",             # "per_transfer" or "one_folder"
+    "sender_subfolders": 1,
+    "if_file_exists": "rename",              # "rename" / "overwrite" / "skip"
 }
 
 @contextmanager
@@ -100,6 +109,13 @@ def ensure_settings_table():
         "sound_incoming_file": "INTEGER NOT NULL DEFAULT 1",
         "sound_incoming_call": "INTEGER NOT NULL DEFAULT 1",
         "sound_tune": "TEXT NOT NULL DEFAULT 'Classic Bell'",
+        "file_accept": "TEXT NOT NULL DEFAULT 'auto'",
+        "show_image_previews": "INTEGER NOT NULL DEFAULT 1",
+        "incoming_location": "TEXT NOT NULL DEFAULT 'system'",
+        "custom_user_subfolder": "INTEGER NOT NULL DEFAULT 0",
+        "save_mode": "TEXT NOT NULL DEFAULT 'per_transfer'",
+        "sender_subfolders": "INTEGER NOT NULL DEFAULT 1",
+        "if_file_exists": "TEXT NOT NULL DEFAULT 'rename'",
     }
     with _db() as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS app_settings
@@ -117,8 +133,10 @@ def load_settings(user_email=""):
             cur = conn.execute(
                 "SELECT * FROM app_settings WHERE user_email=?", (user_email,)
             )
-            row = cur.fetchone()
+            rows = cur.fetchall()          # read everything: no lock is left
+            row = rows[0] if rows else None
             cols = [d[0] for d in cur.description]
+            cur.close()
         if row:
             saved = dict(zip(cols, row))
             result.update({k: saved[k] for k in DEFAULTS
@@ -228,6 +246,23 @@ def play_tune(name):
     except Exception as e:
         print("[SOUND] Could not play tune:", e)
         return False
+
+
+def _local_user_name(user_email, discovery=None):
+    """The logged-in user's name (used in 'Create \\<name> subfolder')."""
+    name = getattr(discovery, "username", "") if discovery is not None else ""
+    if name:
+        return str(name)
+    try:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT firstname, lastname FROM register WHERE email=?",
+                (user_email,)).fetchone()
+        if row:
+            return " ".join(part for part in row if part).strip() or user_email
+    except sqlite3.Error:
+        pass
+    return user_email or "User"
 
 
 # ---------- Helpers for your chat / message window ----------
@@ -895,15 +930,171 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
 
     refresh_net_widgets()
 
-    # File transfer
-    tab = tabs["File Transfer"]; heading(tab, "File Transfer Settings")
-    folder = tk.StringVar(value=data["download_folder"])
-    tk.Label(tab, text="Download Folder", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
-    f = tk.Frame(tab, bg=style.BG); f.pack(fill="x", padx=25, pady=8)
-    style.make_entry(f, textvariable=folder).pack(side="left", fill="x", expand=True, ipady=3)
-    style.make_button(f, "Browse", lambda: folder.set(
-        filedialog.askdirectory(parent=win) or folder.get()),
-        kind="secondary", font=style.SMALL_FONT).pack(side="left", padx=5)
+    # ------------------------------------------------------------------
+    # File Transfer tab: file acceptance + incoming files location
+    # ------------------------------------------------------------------
+    tab = tabs["File Transfer"]
+    heading(tab, "File Transfer")
+
+    local_name = _local_user_name(user_email, discovery)
+
+    def pick(value, allowed, fallback):
+        return value if value in allowed else fallback
+
+    ft_accept = tk.StringVar(value=pick(data["file_accept"], ("auto", "ask"), "auto"))
+    ft_loc = tk.StringVar(value=pick(data["incoming_location"], ("system", "custom"), "system"))
+    ft_mode = tk.StringVar(value=pick(data["save_mode"], ("per_transfer", "one_folder"), "per_transfer"))
+    ft_exists = tk.StringVar(value=filestore.EXISTS_CHOICES.get(
+        data["if_file_exists"], filestore.EXISTS_CHOICES["rename"]))
+    folder = tk.StringVar(value=data["download_folder"])     # the saved custom folder
+    shown = tk.StringVar()                                   # text in the folder box
+    ft_busy = [False]
+
+    # ----- File Acceptance -----
+    section(tab, "File Acceptance")
+    radio(tab, "Start downloading automatically", ft_accept, "auto")
+    radio(tab, "Ask for permission first", ft_accept, "ask")
+    check(tab, "Show previews of incoming images", "show_image_previews")
+
+    # ----- Incoming Files Location (with the "i" help icon) -----
+    loc_head = tk.Frame(tab, bg=style.BG)
+    loc_head.pack(fill="x", padx=25, pady=(5, 2))
+    tk.Label(loc_head, text="Incoming Files Location", bg=style.BG, fg=style.WHITE,
+             font=style.ui_font(11, True)).pack(side="left")
+    info_icon = tk.Label(loc_head, text="ⓘ", bg=style.BG, fg=style.ACCENT,
+                         cursor="hand2", font=style.ui_font(14))
+    info_icon.pack(side="right")
+    tk.Frame(tab, bg=style.BORDER, height=1).pack(fill="x", padx=25, pady=4)
+
+    radio(tab, "System-defined location", ft_loc, "system",
+          command=lambda: ft_refresh())
+    radio(tab, "Custom location:", ft_loc, "custom",
+          command=lambda: ft_refresh())
+
+    path_row = tk.Frame(tab, bg=style.BG)
+    path_row.pack(fill="x", padx=50, pady=(2, 0))
+    ft_entry = style.make_entry(
+        path_row, textvariable=shown, state="disabled",
+        disabledbackground=style.INPUT_BG, disabledforeground=style.MUTED)
+    ft_entry.pack(side="left", fill="x", expand=True, ipady=3)
+    ft_browse = style.make_button(path_row, "...", lambda: ft_browse_folder(),
+                                  kind="secondary", width=3, pady=3,
+                                  font=style.SMALL_FONT)
+    ft_browse.pack(side="left", padx=(6, 25))
+    cb_user = check(tab, f'Create "\\{local_name}" subfolder',
+                    "custom_user_subfolder", padx=50, command=lambda: ft_refresh())
+
+    radio(tab, "Create subfolder for each file transfer", ft_mode, "per_transfer",
+          command=lambda: ft_refresh())
+    radio(tab, "Save all incoming files to one folder", ft_mode, "one_folder",
+          command=lambda: ft_refresh())
+    cb_sender = check(tab, "Use individual subfolder for each sender",
+                      "sender_subfolders", padx=50, command=lambda: ft_refresh())
+
+    exists_row = tk.Frame(tab, bg=style.BG)
+    exists_row.pack(anchor="w", padx=50, pady=(2, 0))
+    tk.Label(exists_row, text="If file already exists:", bg=style.BG,
+             fg=style.WHITE).pack(side="left")
+    exists_combo = ttk.Combobox(exists_row, textvariable=ft_exists,
+                                values=list(filestore.EXISTS_CHOICES.values()),
+                                state="disabled", width=24)
+    exists_combo.pack(side="left", padx=8)
+    exists_combo.bind("<<ComboboxSelected>>", lambda e: ft_refresh())
+
+    example = tk.Label(tab, text="", bg=style.BG, fg=style.MUTED, justify="left",
+                       anchor="w", wraplength=740, font=style.SMALL_FONT)
+    example.pack(fill="x", padx=28, pady=(8, 0))
+
+    # ----- File Transfer tab behaviour -----
+    def exists_key():
+        for key, label in filestore.EXISTS_CHOICES.items():
+            if label == ft_exists.get():
+                return key
+        return "rename"
+
+    def ft_cfg():
+        """The File Transfer settings as they are on screen right now."""
+        return {
+            "file_accept": ft_accept.get(),
+            "show_image_previews": int(vars_["show_image_previews"].get()),
+            "incoming_location": ft_loc.get(),
+            "download_folder": folder.get().strip(),
+            "custom_user_subfolder": int(vars_["custom_user_subfolder"].get()),
+            "save_mode": ft_mode.get(),
+            "sender_subfolders": int(vars_["sender_subfolders"].get()),
+            "if_file_exists": exists_key(),
+        }
+
+    def example_path():
+        return filestore.resolve(ft_cfg(), local_name, "Sara", "report.pdf",
+                                 create=False, check_exists=False)
+
+    def update_example():
+        example.config(text="Example: the file report.pdf received from Sara "
+                            f"is saved as\n{example_path()}")
+
+    def on_shown_changed(*_):
+        if ft_loc.get() == "custom" and not ft_busy[0]:
+            folder.set(shown.get())          # typed by hand
+            update_example()
+
+    shown.trace_add("write", on_shown_changed)
+
+    def ft_refresh():
+        custom = ft_loc.get() == "custom"
+        one = ft_mode.get() == "one_folder"
+
+        ft_busy[0] = True
+        if custom:
+            if not folder.get().strip():
+                folder.set(filestore.default_folder())
+            shown.set(folder.get())
+        else:
+            shown.set(filestore.default_folder())
+        ft_busy[0] = False
+
+        ft_entry.config(state="normal" if custom else "disabled")
+        ft_browse.config(state="normal" if custom else "disabled")
+        cb_user.config(state="normal" if custom else "disabled")
+        cb_sender.config(state="normal" if one else "disabled")
+        exists_combo.config(state="readonly" if one else "disabled")
+        update_example()
+
+    def ft_browse_folder():
+        start = filestore.expand(folder.get())
+        if not os.path.isdir(start):
+            start = os.path.dirname(start)
+        if not os.path.isdir(start):
+            start = os.path.expanduser("~")
+
+        chosen = filedialog.askdirectory(
+            parent=win, title="Choose where incoming files are saved",
+            initialdir=start)
+        if not chosen:
+            return
+        chosen = os.path.normpath(chosen)
+        ft_busy[0] = True
+        folder.set(chosen)
+        shown.set(chosen)
+        ft_busy[0] = False
+        update_example()
+
+    def show_location_help():
+        messagebox.showinfo(
+            "Incoming Files Location",
+            "Choose where the files you receive are saved.\n\n"
+            "System-defined location: Documents\\" + filestore.APP_FOLDER_NAME + "\n"
+            "Custom location: a folder you choose (you can add a subfolder "
+            "named after you).\n\n"
+            "Then choose a new subfolder for each file transfer, or one folder "
+            "for everything (optionally one subfolder per sender, and what to "
+            "do when a file already exists).\n\n"
+            "With your current choices, report.pdf received from Sara is saved as:\n"
+            f"{example_path()}",
+            parent=win)
+
+    info_icon.bind("<Button-1>", lambda e: show_location_help())
+    ft_refresh()
 
     tab = tabs["Hot Keys"]; heading(tab, "Keyboard Shortcuts")
     tk.Label(tab, text="Open Settings: Ctrl + ,\nSend Message: Enter\nClose Window: Alt + F4",
@@ -939,10 +1130,31 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
                 "options. Without a broadcast the app cannot find other users.",
                 parent=win)
             return
+        if ft_loc.get() == "custom":
+            custom = filestore.expand(folder.get())
+            if not custom or not os.path.isabs(custom):
+                messagebox.showerror("Custom Location",
+                    "Enter the full path of a folder for incoming files, "
+                    "for example C:\\Users\\You\\Documents\\Received, or use the "
+                    "... button to choose one.", parent=win)
+                return
+            try:
+                os.makedirs(custom, exist_ok=True)
+                if not os.access(custom, os.W_OK):
+                    raise PermissionError("The folder is read-only.")
+            except OSError as exc:
+                messagebox.showerror("Custom Location",
+                    f"This folder cannot be used for incoming files:\n"
+                    f"{custom}\n\n{exc.strerror or exc}", parent=win)
+                return
         new = {k: int(v.get()) for k, v in vars_.items()}
         new["inactive_minutes"] = int(minutes)
         new.update(theme=theme.get(), language=language.get(),
                    listening_port=p, download_folder=folder.get().strip(),
+                   file_accept=ft_accept.get(),
+                   incoming_location=ft_loc.get(),
+                   save_mode=ft_mode.get(),
+                   if_file_exists=exists_key(),
                    message_mode=message_mode.get(),
                    incoming_behavior=incoming.get(),
                    font_size=font_size.get(),

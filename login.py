@@ -1,14 +1,16 @@
-import tkinter as tk
-import sqlite3
 import hashlib
 import hmac
-
+import sqlite3
+import tkinter as tk
 from tkinter import messagebox
 
-import style
+# PIL library load karne se JPEG/PNG images cleanly display hoti hain
+from PIL import Image, ImageTk
+
 import brand
-import register
 import home
+import register
+import style
 
 DB_NAME = style.data_path("lan_connect_project.db")
 
@@ -19,6 +21,18 @@ CARD_WIDTH = 340
 def show_login():
     win = tk.Tk()
     win.title("NEXO LAN Messenger - Login")
+
+    # ------------------------------------------------------------------
+    # WINDOW TITLE BAR ICON SETTING (Red marked area)
+    # ------------------------------------------------------------------
+    try:
+        # Title bar icon path (logo.png / logo.ico ka path yaha dein)
+        icon_path = style.data_path("logo.png")
+        icon_img = ImageTk.PhotoImage(Image.open(icon_path))
+        win.iconphoto(False, icon_img)
+    except Exception as e:
+        print("Title bar icon load nahi ho saka:", e)
+
     style.center_window(win)
     win.minsize(760, 560)
     win.configure(bg=style.BG)
@@ -28,8 +42,8 @@ def show_login():
     # ------------------------------------------------------------------
     # Left side: brand panel (gradient, logo, features)
     # ------------------------------------------------------------------
-    brand.build_brand_panel(win, PANEL_WIDTH)
-
+    brand_frame = brand.build_brand_panel(win, PANEL_WIDTH)
+    
     # ------------------------------------------------------------------
     # Right side: sign-in card
     # ------------------------------------------------------------------
