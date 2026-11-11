@@ -26,10 +26,17 @@ def show_login():
     # WINDOW TITLE BAR ICON SETTING (Red marked area)
     # ------------------------------------------------------------------
     try:
-        # Title bar icon path (logo.png / logo.ico ka path yaha dein)
-        icon_path = style.data_path("logo.png")
-        icon_img = ImageTk.PhotoImage(Image.open(icon_path))
-        win.iconphoto(False, icon_img)
+        # resource_path = file ke andar se (build ke baad .exe mein bhi chalta hai).
+        # data_path .exe ke bahar wale folder mein dhoondta hai, isi liye
+        # build ke baad icon nahi aata tha.
+        icon_path = style.resource_path("logo.png")
+        logo_img = Image.open(icon_path).convert("RGBA")
+        icons = [
+            ImageTk.PhotoImage(logo_img.resize((size, size), Image.LANCZOS))
+            for size in (64, 32)
+        ]
+        win.iconphoto(True, *icons)      # True = aage khulne wali windows par bhi
+        win._title_icons = icons         # reference rakhna zaroori hai
     except Exception as e:
         print("Title bar icon load nahi ho saka:", e)
 

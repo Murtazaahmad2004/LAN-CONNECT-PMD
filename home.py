@@ -20,6 +20,8 @@ import settings
 import netconfig
 import filestore
 import filetransfer
+import history_viewer
+import sharedfiles
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -229,13 +231,18 @@ class MessageService:
             raw_message = data.split(b"\n", 1)[0]
             msg = json.loads(raw_message.decode("utf-8"))
 
-            if msg.get("type") not in ("chat", "file"):
+            if msg.get("type") not in ("chat", "file", "share_list", "share_get", "share_notify"):
                 return
 
             if msg.get("to") != self.username:
                 # Message is for another copy of the app on this PC.
                 # We answer "NO" (in finally) so the sender tries the next port.
                 print("[CHAT] Message receiver does not match.")
+                return
+
+            if msg.get("type") in ("share_list", "share_get", "share_notify"):
+                accepted = True
+                sharedfiles.serve(conn, msg)
                 return
 
             if msg.get("type") == "file":
@@ -374,10 +381,16 @@ class MessageService:
 
 
 def create_tray_image():
-    img = Image.new("RGB", (64, 64), "#2563eb")
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((16, 16, 48, 48), fill="white")
-    return img
+    """Tray icon made from logo.png (a plain circle if the file is missing)."""
+    try:
+        return Image.open(style.resource_path("logo.png")).convert(
+            "RGBA"
+        ).resize((64, 64), Image.LANCZOS)
+    except Exception:
+        img = Image.new("RGB", (64, 64), "#2563eb")
+        draw = ImageDraw.Draw(img)
+        draw.ellipse((16, 16, 48, 48), fill="white")
+        return img
 
 
 def open_screen(screen_title):
@@ -418,6 +431,37 @@ def open_about():
     open_screen("About")
 
 
+def day_label(day):
+    """Heading above the messages of one day: Today / Yesterday / weekday."""
+    delta = (datetime.now().date() - day).days
+
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Yesterday"
+    return day.strftime("%A, %d %b %Y")          # Monday, 09 Nov 2026
+
+
+FILE_LINE = re.compile(r"^📎 (.+) \([^()]*\)$")
+
+
+def file_message_path(text):
+    """A file message looks like
+         📎 report.pdf (1.2 MB)
+         Saved to: C:\\folder          (or  Sent from: ...)
+    Returns the full path of that file, or None for a normal message."""
+    lines = str(text).split("\n")
+    match = FILE_LINE.match(lines[0])
+
+    if not match or len(lines) < 2:
+        return None
+
+    for prefix in ("Saved to: ", "Sent from: "):
+        if lines[1].startswith(prefix):
+            return os.path.join(lines[1][len(prefix):], match.group(1))
+    return None
+
+
 class ChatView(tk.Frame):
     """Scrollable conversation area with chat bubbles.
 
@@ -432,6 +476,8 @@ class ChatView(tk.Frame):
         self._width = 600
         self._bubbles = []          # (text_label, time_label)
         self._copy_text = ""
+        self._last_day = None       # day of the last message shown
+        self._separators = []       # (label, day) of the day headings
 
         self.canvas = tk.Canvas(self, bg=style.BG, highlightthickness=0, bd=0)
         self.scroll = ttk.Scrollbar(self, orient="vertical",
@@ -525,7 +571,42 @@ class ChatView(tk.Frame):
             except tk.TclError:
                 pass
 
-    def add_message(self, text, time_text, is_me):
+    def _add_separator(self, day):
+        row = tk.Frame(self.inner, bg=style.BG)
+        row.pack(fill="x", pady=(6, 12))
+
+        label = tk.Label(
+            row,
+            text=day_label(day),
+            bg=style.CARD,
+            fg=style.MUTED,
+            font=(style.FONT, 9, "bold"),
+            padx=14,
+            pady=3,
+            highlightthickness=1,
+            highlightbackground=style.BORDER,
+        )
+        label.pack()
+        self._separators.append((label, day))
+
+    def _refresh_separators(self):
+        """'Today' becomes 'Yesterday' after midnight, even while open."""
+        for label, day in self._separators:
+            text = day_label(day)
+            try:
+                if label.cget("text") != text:
+                    label.config(text=text)
+            except tk.TclError:
+                pass
+
+    def add_message(self, text, time_text, is_me, day=None, actions=None):
+        """day: date of the message (a heading is added when the day
+        changes).  actions: [(label, function)] shown under the text."""
+        if day is not None and day != self._last_day:
+            self._add_separator(day)
+            self._last_day = day
+        self._refresh_separators()
+
         row = tk.Frame(self.inner, bg=style.BG)
         row.pack(fill="x", pady=(0, 10))
 
@@ -559,6 +640,21 @@ class ChatView(tk.Frame):
             wraplength=self._wrap(),
         )
         text_label.pack(anchor="w")
+
+        if actions:
+            action_row = tk.Frame(bubble, bg=bubble_bg)
+            action_row.pack(anchor="w", pady=(6, 0))
+            for action_text, action in actions:
+                link = tk.Label(
+                    action_row,
+                    text=action_text,
+                    bg=bubble_bg,
+                    fg=text_fg,
+                    font=(style.FONT, max(self.font_size - 2, 8), "underline"),
+                    cursor="hand2",
+                )
+                link.pack(side="left", padx=(0, 14))
+                link.bind("<Button-1>", lambda e, f=action: f())
 
         time_label = tk.Label(
             bubble,
@@ -688,6 +784,56 @@ def show_image_preview(parent, sender, path):
     top.lift()
     return top
 
+class ToolTip:
+    """Small label that appears when the mouse rests on a widget."""
+
+    def __init__(self, widget, text, delay=400):
+        self.widget, self.text, self.delay = widget, text, delay
+        self.tip = None
+        self.job = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self.job = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self.job is not None:
+            try:
+                self.widget.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+
+    def _show(self):
+        self.job = None
+        if self.tip is not None:
+            return
+        try:
+            x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            self.tip = tk.Toplevel(self.widget)
+            self.tip.wm_overrideredirect(True)
+            self.tip.attributes("-topmost", True)
+            tk.Label(
+                self.tip, text=self.text, bg="#1f2937", fg="#ffffff",
+                font=(style.FONT, 9), padx=9, pady=4
+            ).pack()
+            self.tip.update_idletasks()
+            self.tip.wm_geometry(f"+{x - self.tip.winfo_width() // 2}+{y}")
+        except tk.TclError:
+            self.tip = None
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.tip is not None:
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
+            self.tip = None
 
 def home_page(user_email):
 
@@ -750,11 +896,14 @@ def home_page(user_email):
 
     win = tk.Tk()
     win.title("NEXO LAN Messenger")
+    style.set_app_icon(win)
     style.center_window(win)
     win.configure(bg=style.BG)
     style.setup_ttk(win)
+    
 
     create_chat_table()
+    sharedfiles.init(DB_NAME)
 
     conn = sqlite3.connect(DB_NAME)
     try:
@@ -875,21 +1024,23 @@ def home_page(user_email):
     def font_px():
         return settings.FONT_SIZES.get(state["font_size"], 13)
 
+    def local_time(ts=None):
+        """Local date/time of a message (None = now)."""
+        if ts is None:
+            return datetime.now()
+        try:
+            # SQLite CURRENT_TIMESTAMP is stored in UTC
+            return datetime.strptime(
+                str(ts)[:19], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc).astimezone()
+        except ValueError:
+            return datetime.now()
+
     def format_timestamp(ts=None):
         """Time stamp text. Respects 'Do not show date in time stamp'."""
         fmt = "%I:%M %p" if state["hide_date_in_timestamp"] \
             else "%d-%m-%Y %I:%M %p"
-        if ts is None:
-            dt = datetime.now()
-        else:
-            try:
-                # SQLite CURRENT_TIMESTAMP is stored in UTC
-                dt = datetime.strptime(
-                    str(ts)[:19], "%Y-%m-%d %H:%M:%S"
-                ).replace(tzinfo=timezone.utc).astimezone()
-            except ValueError:
-                dt = datetime.now()
-        return dt.strftime(fmt)
+        return local_time(ts).strftime(fmt)
 
     def apply_chat_fonts():
         """Applies the chosen Font Size to the open chat (live)."""
@@ -913,7 +1064,32 @@ def home_page(user_email):
             return
 
         is_me = sender == local_username
-        conv.add_message(message, format_timestamp(ts), is_me)
+
+        # A file message keeps "Open" / "Show folder" links for good
+        actions = None
+        path = file_message_path(message)
+        if path:
+            actions = [
+                ("Open file", lambda p=path: open_saved_file(p)),
+                ("Show folder",
+                 lambda p=path: filestore.open_folder(os.path.dirname(p))),
+            ]
+
+        conv.add_message(
+            message, format_timestamp(ts), is_me,
+            day=local_time(ts).date(), actions=actions
+        )
+
+    def open_saved_file(path):
+        if not os.path.exists(path):
+            messagebox.showinfo(
+                "File not found",
+                f"This file is no longer there:\n{path}\n\n"
+                "It was moved or deleted after it was saved.",
+                parent=win
+            )
+            return
+        filestore.open_file(path)
 
     def check_spelling(event=None):
         """Red underline for misspelled words (needs pyspellchecker)."""
@@ -1500,7 +1676,10 @@ def home_page(user_email):
                 tracker.close()
 
             if status == "sent":
-                text = f"📎 {name} ({filetransfer.human_size(size)})"
+                text = (
+                    f"📎 {name} ({filetransfer.human_size(size)})"
+                    f"\nSent from: {os.path.dirname(os.path.abspath(path))}"
+                )
                 try:
                     save_message(local_username, receiver, text, uid)
                 except sqlite3.Error as e:
@@ -1739,6 +1918,8 @@ def home_page(user_email):
         on_update=safe_update_users
     )
     discovery.set_roster(registered_usernames)
+    
+    sharedfiles.start_sync(local_username, discovery)
 
     def apply_network_config():
         """Gives discovery the broadcast list and network tag chosen in
@@ -1963,7 +2144,8 @@ def home_page(user_email):
             win.unbind_all("<Motion>")
         except tk.TclError:
             pass
-
+        
+        sharedfiles.stop_sync()
         stop_tray()
 
         if message_service is not None:
@@ -2089,17 +2271,20 @@ def home_page(user_email):
     menu_items = [
         ("⚙", "Settings", open_settings_window),
         ("📥", "Received Files", open_received_files_folder),
-        ("💬", "Message History", open_message_history),
+        ("💬", "Message History", lambda: history_viewer.open_history(
+            win, DB_NAME, local_username, select=active_chat["username"])),
+        ("📁", "Shared Files", lambda: sharedfiles.open_shared_files(
+            win, DB_NAME, local_username, discovery)),
         ("❓", "Help", open_help),
         ("ⓘ", "About", open_about),
         ("⇥", "Logout", open_logout),
     ]
 
-    for icon_text, item_title, screen_function in menu_items:
-        menu_btn = tk.Button(
+    def make_icon_button(icon, tip, command):
+        btn = tk.Button(
             top_menu_frame,
-            text=f"{icon_text}  {item_title}",
-            font=style.ui_font(10, True),
+            text=icon,
+            font=("Segoe UI Symbol", 15),
             bg=style.CARD,
             fg=style.WHITE,
             activebackground=style.CARD,
@@ -2107,30 +2292,28 @@ def home_page(user_email):
             relief="flat",
             bd=0,
             cursor="hand2",
-            padx=12,
-            pady=14,
-            command=screen_function
+            width=3,
+            pady=10,
+            command=command
         )
-        menu_btn.pack(side="left", padx=5, pady=3)
-        style.hover_text(menu_btn)
+        style.hover_text(btn)
+        ToolTip(btn, tip)
+        return btn
 
-    theme_btn = tk.Button(
-        top_menu_frame,
-        text="🌓  Theme",
-        font=style.ui_font(10, True),
-        bg=style.CARD,
-        fg=style.WHITE,
-        activebackground=style.CARD,
-        activeforeground=style.ACCENT,
-        relief="flat",
-        bd=0,
-        cursor="hand2",
-        padx=12,
-        pady=14,
-        command=toggle_theme
-    )
-    theme_btn.pack(side="right", padx=5, pady=3)
-    style.hover_text(theme_btn)
+    def add_separator(side):
+        tk.Frame(
+            top_menu_frame, bg=style.BORDER, width=1, height=24
+        ).pack(side=side, padx=6, pady=14)
+
+    for icon_text, item_title, screen_function in menu_items:
+        make_icon_button(icon_text, item_title, screen_function).pack(
+            side="left", padx=2, pady=3
+        )
+        add_separator("left")
+
+    theme_btn = make_icon_button("🌓", "Theme", toggle_theme)
+    theme_btn.pack(side="right", padx=2, pady=3)
+    add_separator("right")
 
     win.bind_all("<KeyPress>", mark_activity)
     win.bind_all("<Button>", mark_activity)

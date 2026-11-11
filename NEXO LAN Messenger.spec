@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('pmd_logo.png', '.'), ('logo.png', '.')]
+datas += collect_data_files('spellchecker')
 
 
 a = Analysis(
     ['login.py'],
     pathex=[],
     binaries=[],
-    datas=[('pmd_logo.png', '.'), ('logo.png', '.')],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -22,7 +26,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='login',
+    name='NEXO LAN Messenger',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

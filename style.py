@@ -516,6 +516,21 @@ def center_window(win, width=None, height=None):
     win.geometry(f"{width}x{height}+{x}+{y}")
 
 
+def set_app_icon(win):
+    """Window / taskbar icon made from logo.png (skipped if it is missing)."""
+    try:
+        from PIL import Image, ImageTk
+        logo = Image.open(resource_path("logo.png")).convert("RGBA")
+        photos = [
+            ImageTk.PhotoImage(logo.resize((size, size), Image.LANCZOS))
+            for size in (64, 32)
+        ]
+        win.iconphoto(True, *photos)        # also used by windows opened later
+        win._app_icons = photos             # keep references
+    except Exception:
+        pass
+
+
 def resource_path(filename):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, filename)
