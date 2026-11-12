@@ -114,6 +114,69 @@ THEMES = {
     },
 }
 
+EXTRA_THEMES = {
+    "Ocean Blue": {
+        "BG": "#EAF3FB", "CARD": "#FFFFFF", "INPUT_BG": "#F0F6FC",
+        "TEXT": "#0F2A43", "TEXT_INPUT": "#1B3A57", "MUTED": "#5B7A94",
+        "PLACEHOLDER": "#94AEC4", "LABEL": "#2E4E6B", "BORDER": "#C5D9EC",
+        "HOVER": "#DCE9F5", "ACCENT": "#1E78C8", "ACCENT_HOVER": "#1763A8",
+        "ON_ACCENT": "#F7FBFF", "RED": "#DC2626", "BLUE": "#3B82F6",
+        "GREEN": "#16A34A",
+    },
+    "Mint Green": {
+        "BG": "#E9F7EF", "CARD": "#FFFFFF", "INPUT_BG": "#F1FAF5",
+        "TEXT": "#12382A", "TEXT_INPUT": "#1E4A38", "MUTED": "#5F8672",
+        "PLACEHOLDER": "#9BBBA9", "LABEL": "#2F5C47", "BORDER": "#C3E3D1",
+        "HOVER": "#D8EEE2", "ACCENT": "#1F9D68", "ACCENT_HOVER": "#17825A",
+        "ON_ACCENT": "#F6FFFA", "RED": "#DC2626", "BLUE": "#3B82F6",
+        "GREEN": "#16A34A",
+    },
+    "Teal Breeze": {
+        "BG": "#E6F5F5", "CARD": "#FFFFFF", "INPUT_BG": "#EFF9F9",
+        "TEXT": "#12363A", "TEXT_INPUT": "#1C4A4F", "MUTED": "#5A8587",
+        "PLACEHOLDER": "#98BDBF", "LABEL": "#2B5B5F", "BORDER": "#BFE0E0",
+        "HOVER": "#D5ECEC", "ACCENT": "#0E8C93", "ACCENT_HOVER": "#0B7479",
+        "ON_ACCENT": "#F5FFFF", "RED": "#DC2626", "BLUE": "#3B82F6",
+        "GREEN": "#16A34A",
+    },
+    "Lavender": {
+        "BG": "#F1EEFA", "CARD": "#FFFFFF", "INPUT_BG": "#F7F5FD",
+        "TEXT": "#261F45", "TEXT_INPUT": "#352C5E", "MUTED": "#7A72A0",
+        "PLACEHOLDER": "#B0AACB", "LABEL": "#4A4075", "BORDER": "#D9D2EF",
+        "HOVER": "#E6E0F6", "ACCENT": "#6C55C9", "ACCENT_HOVER": "#5841AE",
+        "ON_ACCENT": "#FAF8FF", "RED": "#DC2626", "BLUE": "#3B82F6",
+        "GREEN": "#16A34A",
+    },
+    "Slate Pro": {
+        "BG": "#EEF1F5", "CARD": "#FFFFFF", "INPUT_BG": "#F5F7FA",
+        "TEXT": "#1B2633", "TEXT_INPUT": "#2A3747", "MUTED": "#667385",
+        "PLACEHOLDER": "#9AA5B4", "LABEL": "#3E4C5E", "BORDER": "#D2D8E0",
+        "HOVER": "#E1E6ED", "ACCENT": "#334E68", "ACCENT_HOVER": "#243B52",
+        "ON_ACCENT": "#F7F9FC", "RED": "#DC2626", "BLUE": "#3B82F6",
+        "GREEN": "#16A34A",
+    },
+    "Midnight Blue": {
+        "BG": "#0C1627", "CARD": "#14233A", "INPUT_BG": "#1B2E4A",
+        "TEXT": "#E6EDF7", "TEXT_INPUT": "#D5E0F0", "MUTED": "#8AA0BD",
+        "PLACEHOLDER": "#5F7694", "LABEL": "#B8C7DC", "BORDER": "#263B58",
+        "HOVER": "#1E3250", "ACCENT": "#4AA3FF", "ACCENT_HOVER": "#75BBFF",
+        "ON_ACCENT": "#06121F", "RED": "#F87171", "BLUE": "#60A5FA",
+        "GREEN": "#4ADE80",
+    },
+    "Emerald Night": {
+        "BG": "#0D1A16", "CARD": "#14261F", "INPUT_BG": "#1B3329",
+        "TEXT": "#E4F3EC", "TEXT_INPUT": "#D2E8DD", "MUTED": "#86A89A",
+        "PLACEHOLDER": "#5E8272", "LABEL": "#B4D1C3", "BORDER": "#284539",
+        "HOVER": "#1F382D", "ACCENT": "#34D399", "ACCENT_HOVER": "#6EE7B7",
+        "ON_ACCENT": "#05150E", "RED": "#F87171", "BLUE": "#60A5FA",
+        "GREEN": "#4ADE80",
+    },
+}
+THEMES.update(EXTRA_THEMES)
+
+# Order shown in the Theme dropdowns
+THEME_NAMES = ["Auto", "Light", "Dark"] + list(EXTRA_THEMES)
+
 # Old names used by the existing code -> new tokens.
 _ALIASES = {
     "WHITE": "TEXT",          # main text colour
@@ -186,7 +249,7 @@ def load_preference():
     try:
         data = json.loads(PREF_FILE.read_text(encoding="utf-8"))
         theme = data.get("theme", "Auto")
-        return theme if theme in ("Auto", "Light", "Dark") else "Auto"
+        return theme if theme == "Auto" or theme in THEMES else "Auto"
     except (OSError, ValueError, AttributeError):
         return "Auto"
 

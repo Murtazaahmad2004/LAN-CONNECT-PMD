@@ -22,6 +22,8 @@ import filestore
 import filetransfer
 import history_viewer
 import sharedfiles
+import groupchat
+import about
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -132,8 +134,9 @@ def get_registered_usernames():
 
 class MessageService:
 
-    def __init__(self, username, on_message, find_peer, on_file=None):
+    def __init__(self, username, on_message, find_peer, on_file=None, on_group=None):
         self.username = username
+        self.on_group = on_group        # on_group(msg) for group_msg / group_sync
         self.on_message = on_message
         self.find_peer = find_peer
         self.on_file = on_file          # on_file(conn, header, leftover)
@@ -231,7 +234,8 @@ class MessageService:
             raw_message = data.split(b"\n", 1)[0]
             msg = json.loads(raw_message.decode("utf-8"))
 
-            if msg.get("type") not in ("chat", "file", "share_list", "share_get", "share_notify"):
+            if msg.get("type") not in ("chat", "file", "share_list", "share_get", "share_notify",
+                                       "group_msg", "group_sync"):
                 return
 
             if msg.get("to") != self.username:
@@ -243,6 +247,16 @@ class MessageService:
             if msg.get("type") in ("share_list", "share_get", "share_notify"):
                 accepted = True
                 sharedfiles.serve(conn, msg)
+                return
+
+            if msg.get("type") in ("group_msg", "group_sync"):
+                accepted = True
+                try:
+                    conn.sendall(b"OK\n")
+                except OSError:
+                    pass
+                if self.on_group is not None:
+                    self.on_group(msg)
                 return
 
             if msg.get("type") == "file":
@@ -348,6 +362,35 @@ class MessageService:
                 break
 
         print(f"[CHAT] Could not send message to {receiver}")
+        return False
+
+    def send_json(self, receiver, obj):
+        """Sends any JSON message (used by the group chat). True = delivered."""
+        peer = self.find_peer(receiver)
+
+        if not peer:
+            return False
+
+        ip, port = peer
+        data = dict(obj)
+        data["from"] = self.username
+        data["to"] = receiver
+        payload = json.dumps(data).encode("utf-8") + b"\n"
+
+        ports = [port] + [
+            p for p in range(CHAT_PORT, CHAT_PORT + PORT_TRIES)
+            if p != port
+        ]
+
+        for p in ports:
+            result = self._try_send(ip, p, payload)
+
+            if result == "ok":
+                return True
+
+            if result == "error":
+                break
+
         return False
 
     def send_file(self, receiver, path, tracker=None):
@@ -900,10 +943,11 @@ def home_page(user_email):
     style.center_window(win)
     win.configure(bg=style.BG)
     style.setup_ttk(win)
-    
+    theme_var = tk.StringVar(value=state["theme_mode"])    
 
     create_chat_table()
     sharedfiles.init(DB_NAME)
+    groupchat.init(DB_NAME)
 
     conn = sqlite3.connect(DB_NAME)
     try:
@@ -1791,9 +1835,104 @@ def home_page(user_email):
         except tk.TclError:
             pass
 
+    # ------------------------------------------------------------------
+    # General Group
+    # ------------------------------------------------------------------
+    def on_group_event(msg):
+        """Network thread: a group message or a membership update arrived."""
+        try:
+            result = groupchat.handle_incoming(local_username, msg)
+        except sqlite3.Error as e:
+            print("[GROUP] Database error:", e)
+            return
+
+        if not result:
+            return
+
+        def handle():
+            try:
+                if not win.winfo_exists():
+                    return
+
+                group_win = groupchat.window_open()
+
+                if result["kind"] == "sync":
+                    if group_win:
+                        group_win.on_members_changed()
+                    return
+
+                was_active = False
+                if group_win:
+                    group_win.on_message(result["sender"], result["text"])
+                    was_active = group_win.is_active()
+
+                if not was_active:
+                    key = groupchat.UNREAD_KEY
+                    unread[key] = unread.get(key, 0) + 1
+                    render_users()
+
+                if not (state["sound_when"] == "background" and was_active):
+                    play_event_sound("message")
+
+            except tk.TclError as e:
+                print("[GROUP] UI error:", e)
+
+        try:
+            win.after(0, handle)
+        except tk.TclError:
+            pass
+
+    def open_group_chat():
+        unread.pop(groupchat.UNREAD_KEY, None)
+        render_users()
+        groupchat.open_group_window(
+            win,
+            local_username,
+            discovery,
+            lambda name, obj: (
+                message_service.send_json(name, obj) if message_service else False
+            ),
+            ChatView,
+            font_px()
+        )
+
+    def add_group_row():
+        """'General Group' stays pinned at the top of the LAN Users list."""
+        count = unread.get(groupchat.UNREAD_KEY, 0)
+
+        row = tk.Frame(online_users_frame, bg=style.CARD)
+        row.pack(fill="x", padx=10, pady=(5, 2))
+
+        icon = tk.Label(
+            row, text="👥", bg=style.CARD, fg=style.ACCENT,
+            font=style.ui_font(11), cursor="hand2"
+        )
+        icon.pack(side="left", padx=(0, 7))
+
+        name_label = tk.Label(
+            row,
+            text=f"{groupchat.GROUP_NAME}  ({count})" if count
+            else groupchat.GROUP_NAME,
+            font=style.ui_font(11, True),
+            bg=style.CARD,
+            fg=style.ACCENT if count else style.WHITE,
+            cursor="hand2",
+            anchor="w"
+        )
+        name_label.pack(side="left", fill="x", expand=True)
+
+        for widget in (row, icon, name_label):
+            widget.bind("<Button-1>", lambda event: open_group_chat())
+
+        tk.Frame(online_users_frame, bg=style.BORDER, height=1).pack(
+            fill="x", padx=10, pady=(4, 2)
+        )
+
     def render_users():
         for widget in online_users_frame.winfo_children():
             widget.destroy()
+
+        add_group_row()
 
         visible_users = [
             user
@@ -1944,7 +2083,8 @@ def home_page(user_email):
         username=local_username,
         on_message=on_incoming_message,
         find_peer=find_peer,
-        on_file=handle_incoming_file
+        on_file=handle_incoming_file,
+        on_group=on_group_event
     )
 
     chat_started = message_service.start()
@@ -2067,7 +2207,8 @@ def home_page(user_email):
             sound_incoming_file=bool(new.get("sound_incoming_file", 1)),
             sound_incoming_call=bool(new.get("sound_incoming_call", 1)),
         )
-
+        
+        theme_var.set(state["theme_mode"])
         apply_chat_fonts()      # font size changes live in the open chat
         check_spelling()        # spell checking on/off live
         apply_network_config()  # new broadcasts / network tag take effect now
@@ -2093,23 +2234,36 @@ def home_page(user_email):
             on_save=on_settings_saved
         )
 
-    def toggle_theme():
-        new_mode = (
-            "Dark"
-            if style.CURRENT_THEME == "Light"
-            else "Light"
-        )
-
+    def choose_theme(mode):
         try:
             saved = settings.load_settings(user_email)
-            saved["theme"] = new_mode
+            saved["theme"] = mode
             settings.save_settings(user_email, saved)
         except Exception as e:
             print("[THEME] Save error:", e)
 
-        state["theme_mode"] = new_mode
-        style.apply_theme(win, new_mode)
-        style.save_preference(new_mode)
+        state["theme_mode"] = mode
+        theme_var.set(mode)
+        style.apply_theme(win, mode)
+        style.save_preference(mode)
+
+    def show_theme_menu():
+        menu = tk.Menu(win, tearoff=0)
+        theme_var.set(state["theme_mode"])
+        for name in style.THEME_NAMES:
+            menu.add_radiobutton(
+                label=name,
+                variable=theme_var,
+                value=name,
+                command=lambda n=name: choose_theme(n)
+            )
+        try:
+            menu.tk_popup(
+                theme_btn.winfo_rootx(),
+                theme_btn.winfo_rooty() + theme_btn.winfo_height()
+            )
+        finally:
+            menu.grab_release()
 
     def stop_tray():
         nonlocal tray_icon
@@ -2276,7 +2430,7 @@ def home_page(user_email):
         ("📁", "Shared Files", lambda: sharedfiles.open_shared_files(
             win, DB_NAME, local_username, discovery)),
         ("❓", "Help", open_help),
-        ("ⓘ", "About", open_about),
+        ("ⓘ", "About", lambda: about.open_about(win)),
         ("⇥", "Logout", open_logout),
     ]
 
@@ -2311,7 +2465,7 @@ def home_page(user_email):
         )
         add_separator("left")
 
-    theme_btn = make_icon_button("🌓", "Theme", toggle_theme)
+    theme_btn = make_icon_button("🌓", "Theme", show_theme_menu)
     theme_btn.pack(side="right", padx=2, pady=3)
     add_separator("right")
 

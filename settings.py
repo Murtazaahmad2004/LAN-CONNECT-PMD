@@ -31,7 +31,7 @@ DEFAULTS = {
     "theme": "Auto", "language": "English",
     "display_name": "", "department": "", "listening_port": "5000",
     "discover_peers": 1, "download_folder": "", "sound_enabled": 1,
-    "logging_enabled": 1, "enter_to_send": 1,
+    "enter_to_send": 1,
     "inactive_on_minimize": 1, "inactive_minutes": 5,
     # ---- Message Window (Messaging tab) ----
     "message_mode": "conversation",          # "single" or "conversation"
@@ -88,7 +88,6 @@ def ensure_settings_table():
         "discover_peers": "INTEGER NOT NULL DEFAULT 1",
         "download_folder": "TEXT DEFAULT ''",
         "sound_enabled": "INTEGER NOT NULL DEFAULT 1",
-        "logging_enabled": "INTEGER NOT NULL DEFAULT 1",
         "enter_to_send": "INTEGER NOT NULL DEFAULT 1",
         "inactive_on_minimize": "INTEGER NOT NULL DEFAULT 1",
         "inactive_minutes": "INTEGER NOT NULL DEFAULT 5",
@@ -297,7 +296,7 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     notebook.pack(fill="both", expand=True, padx=10, pady=(10, 6))
     tabs = {}
     for name in ("General", "Messaging", "Sound Events",
-                 "Network", "File Transfer", "Logging", "Hot Keys"):
+                 "Network", "File Transfer"):
         tabs[name] = tk.Frame(notebook, bg=style.BG)
         notebook.add(tabs[name], text=name)
 
@@ -357,8 +356,8 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     language = tk.StringVar(value="English")
     row = tk.Frame(tab, bg=style.BG); row.pack(anchor="w", padx=50, pady=4)
     tk.Label(row, text="Theme:", bg=style.BG, fg=style.WHITE).pack(side="left", padx=8)
-    ttk.Combobox(row, textvariable=theme, values=["Auto", "Light", "Dark"],
-                 state="readonly", width=14).pack(side="left")
+    ttk.Combobox(row, textvariable=theme, values=style.THEME_NAMES,
+        state="readonly", width=18).pack(side="left")
     row2 = row  # Language sits on the same line as Theme to save height
     tk.Label(row2, text="Language:", bg=style.BG, fg=style.WHITE).pack(side="left", padx=(30, 8))
     ttk.Combobox(row2, textvariable=language, values=["English"],
@@ -573,10 +572,6 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
     style.make_button(tune_row, "▶ Play", preview_tune, kind="secondary",
                       width=8).pack(side="left", padx=8)
     refresh_sound_options()
-
-    # Logging
-    heading(tabs["Logging"], "Logging Settings")
-    check(tabs["Logging"], "Enable application logging", "logging_enabled")
 
     # ------------------------------------------------------------------
     # Network tab: settings location, broadcasts, network tagging
@@ -1095,10 +1090,6 @@ def open_settings(user_email="", main_window=None, discovery=None, on_save=None)
 
     info_icon.bind("<Button-1>", lambda e: show_location_help())
     ft_refresh()
-
-    tab = tabs["Hot Keys"]; heading(tab, "Keyboard Shortcuts")
-    tk.Label(tab, text="Open Settings: Ctrl + ,\nSend Message: Enter\nClose Window: Alt + F4",
-             justify="left", bg=style.BG, fg=style.WHITE).pack(anchor="w", padx=25)
 
     def save():
         p = port.get().strip()
