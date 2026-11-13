@@ -1,15 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
-
-datas = [('pmd_logo.png', '.'), ('logo.png', '.')]
-datas += collect_data_files('spellchecker')
 
 
 a = Analysis(
     ['login.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
+    datas=[('logo.png', '.'), ('VERSION.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -39,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['logo.ico'],
 )
