@@ -5,7 +5,7 @@ a = Analysis(
     ['login.py'],
     pathex=[],
     binaries=[],
-    datas=[('logo.png', '.'), ('VERSION.txt', '.')],
+    datas=[('logo.png', '.'), ('pmd_logo.png', '.'), ('VERSION.txt', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
