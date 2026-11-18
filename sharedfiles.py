@@ -111,11 +111,23 @@ def add_file(me, src, progress=None):
        "VALUES (?,?,?,?,?,?)", (fid, me, me, name, total, added))
     return fid
 
-
 def held_items(holder):
     return _q("SELECT id, owner, name, size, added, path FROM share_items "
-              "WHERE holder=? ORDER BY added DESC", (holder,))
+        "WHERE holder=? ORDER BY added DESC", (holder,))
 
+def file_owner(me, fid):
+    """Real owner of a file, read from the database (None if unknown)."""
+    rows = _q("SELECT owner FROM share_catalog WHERE id=? AND viewer=?", (fid, me))
+    if not rows:
+        rows = _q("SELECT owner FROM share_items WHERE id=? AND holder=?", (fid, me))
+    return rows[0][0] if rows else None
+
+def delete_own_file(me, fid):
+    """User-initiated removal. Only the owner may do it. Returns True if removed."""
+    if file_owner(me, fid) != me:
+        return False
+    apply_deletion(me, fid)
+    return True
 
 def apply_deletion(me, fid):
     """Deletes the local copy and remembers the removal (it spreads to others)."""
