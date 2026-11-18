@@ -7,6 +7,7 @@ from tkinter import messagebox
 # PIL library load karne se JPEG/PNG images cleanly display hoti hain
 from PIL import Image, ImageTk
 
+import manual
 import brand
 import home
 import register
@@ -20,7 +21,7 @@ CARD_WIDTH = 340
 
 def show_login():
     win = tk.Tk()
-    win.title("NEXO LAN Messenger - Login")
+    win.title("Nexo Lan Messenger - Login")
 
     # ------------------------------------------------------------------
     # WINDOW TITLE BAR ICON SETTING (Red marked area)
@@ -307,13 +308,21 @@ def show_login():
         lambda e: register_link.config(fg=style.ACCENT),
     )
 
-    tk.Label(
-        right_panel,
-        text="Need help? Contact your IT administrator.",
-        font=style.ui_font(9),
+    help_row = tk.Frame(right_panel, bg=style.CARD)
+    help_row.place(relx=0.5, rely=1.0, anchor="s", y=-20)
+
+    help_link = tk.Label(
+        help_row,
+        text="Need help?",
+        font=style.ui_font(9, True),
         bg=style.CARD,
-        fg=style.MUTED,
-    ).place(relx=0.5, rely=1.0, anchor="s", y=-20)
+        fg=style.ACCENT,
+        cursor="hand2",
+    )
+    help_link.pack(side="left")
+    help_link.bind("<Button-1>", lambda e: manual.open_manual(win))
+    help_link.bind("<Enter>", lambda e: help_link.config(fg=style.ACCENT_HOVER))
+    help_link.bind("<Leave>", lambda e: help_link.config(fg=style.ACCENT))
 
     entry_email.bind("<Return>", lambda e: entry_password.focus_set(), add="+")
     entry_password.bind("<Return>", check, add="+")

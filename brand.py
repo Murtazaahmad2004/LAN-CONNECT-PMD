@@ -136,7 +136,7 @@ def build_brand_panel(parent, panel_width):
 
         # --- title and tagline
         y += 26
-        canvas.create_text(cx, y, text="NEXO LAN Messenger", anchor="n",
+        canvas.create_text(cx, y, text="Nexo Lan Messenger", anchor="n",
                            font=style.ui_font(28, True), fill=WHITE)
         y += 48
         canvas.create_text(

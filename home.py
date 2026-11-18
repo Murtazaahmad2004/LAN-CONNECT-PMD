@@ -24,6 +24,7 @@ import history_viewer
 import sharedfiles
 import groupchat
 import about
+import manual
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -2429,7 +2430,7 @@ def home_page(user_email):
             win, DB_NAME, local_username, select=active_chat["username"])),
         ("📁", "Shared Files", lambda: sharedfiles.open_shared_files(
             win, DB_NAME, local_username, discovery)),
-        ("❓", "Help", open_help),
+        ("❓", "Help", lambda: manual.open_manual(win)),
         ("ⓘ", "About", lambda: about.open_about(win)),
         ("⇥", "Logout", open_logout),
     ]
@@ -2446,8 +2447,8 @@ def home_page(user_email):
             relief="flat",
             bd=0,
             cursor="hand2",
-            width=3,
-            pady=10,
+            width=4,
+            pady=0,
             command=command
         )
         style.hover_text(btn)
@@ -2455,9 +2456,9 @@ def home_page(user_email):
         return btn
 
     def add_separator(side):
-        tk.Frame(
-            top_menu_frame, bg=style.BORDER, width=1, height=24
-        ).pack(side=side, padx=6, pady=14)
+       tk.Frame(
+            top_menu_frame, bg=style.BORDER, width=1, height=18
+        ).pack(side=side, padx=6, pady=5)
 
     for icon_text, item_title, screen_function in menu_items:
         make_icon_button(icon_text, item_title, screen_function).pack(
