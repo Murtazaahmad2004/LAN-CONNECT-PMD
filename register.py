@@ -96,7 +96,7 @@ def open_register():
     tk.Label(
         card,
         text="Create Account",
-        font=("Segoe UI", 22, "bold"),
+        font=(style.FONT, 22, "bold"),
         bg=style.CARD,
         fg=style.WHITE,
     ).pack(anchor="w")
@@ -104,7 +104,7 @@ def open_register():
     tk.Label(
         card,
         text="Fill in your details to get started",
-        font=("Segoe UI", 10),
+        font=(style.FONT, 10),
         bg=style.CARD,
         fg=style.MUTED,
     ).pack(anchor="w", pady=(2, 18))
@@ -147,7 +147,7 @@ def open_register():
         tk.Label(
             parent,
             text=label_text,
-            font=("Segoe UI", 9, "bold"),
+            font=(style.FONT, 9, "bold"),
             bg=style.CARD,
             fg=style.WHITE,
             anchor="w",
@@ -164,7 +164,7 @@ def open_register():
 
         entry = tk.Entry(
             wrap,
-            font=("Segoe UI", 11),
+            font=(style.FONT, 11),
             bg=style.INPUT_BG,
             fg=style.BLACK,
             insertbackground=style.BLACK,
@@ -225,7 +225,7 @@ def open_register():
     error_label = tk.Label(
         card,
         text="",
-        font=("Segoe UI", 9),
+        font=(style.FONT, 9),
         bg=style.CARD,
         fg=style.RED,
         anchor="w",
@@ -311,7 +311,7 @@ def open_register():
     tk.Label(
         footer,
         text="Already have an account?",
-        font=("Segoe UI", 10),
+        font=(style.FONT, 10),
         bg=style.CARD,
         fg=style.MUTED,
     ).pack(side="left")
@@ -319,15 +319,15 @@ def open_register():
     login_link = tk.Label(
         footer,
         text=" Login",
-        font=("Segoe UI", 10, "bold"),
+        font=(style.FONT, 10, "bold"),
         bg=style.CARD,
         fg=style.ACCENT,
         cursor="hand2",
     )
     login_link.pack(side="left")
     login_link.bind("<Button-1>", lambda e: win.destroy())
-    login_link.bind("<Enter>", lambda e: login_link.config(font=("Segoe UI", 10, "bold underline")))
-    login_link.bind("<Leave>", lambda e: login_link.config(font=("Segoe UI", 10, "bold")))
+    login_link.bind("<Enter>", lambda e: login_link.config(font=(style.FONT, 10, "bold underline")))
+    login_link.bind("<Leave>", lambda e: login_link.config(font=(style.FONT, 10, "bold")))
 
     fields = [first_name, last_name, department, job_title, email, password]
 

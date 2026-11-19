@@ -160,7 +160,7 @@ def build_brand_panel(parent, panel_width):
 
         # --- footer
         canvas.create_text(
-            cx, h - 22, text=f"© {datetime.now().year}  PMD  ·  NEXO LAN Messenger",
+            cx, h - 22, text=f"© {datetime.now().year}  PMD  ·  Nexo Lan Messenger",
             font=style.ui_font(9), fill=FOOTER_TEXT
         )
 

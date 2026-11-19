@@ -73,7 +73,7 @@ def open_manual(parent=None):
     if not os.path.exists(path):
         messagebox.showerror(
             "Help",
-            f"User manual file nahi mili:\n{path}",
+            f"User manual file not found:\n{path}",
             parent=parent,
         )
         return
@@ -93,9 +93,9 @@ def open_manual(parent=None):
         if size == 0 or not header.startswith(b"%PDF"):
             messagebox.showerror(
                 "Help",
-                "Ye file sahi PDF nahi hai ya kharab hai.\n\n"
+                "This file pdf is wrong.\n\n"
                 f"Size: {size} bytes\nFile: {path}\n\n"
-                "Isay dobara PDF ke taur par save karein.",
+                "Please save this again as a pdf.",
                 parent=parent,
             )
             return
@@ -111,6 +111,6 @@ def open_manual(parent=None):
     if not _open_path(path):
         messagebox.showerror(
             "Help",
-            f"Browser mein manual open nahi ho saka.\n\nFile yahan hai:\n{path}",
+            f"Manual is not open in browser.\n\nFile place on this path:\n{path}",
             parent=parent,
         )

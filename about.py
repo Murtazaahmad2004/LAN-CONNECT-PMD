@@ -43,7 +43,7 @@ def get_version():
 
 
 # ---- edit these values --------------------------------------------------
-APP_NAME = "NEXO LAN Messenger"
+APP_NAME = "Nexo Lan Messenger"
 APP_VERSION = get_version()          # <- no longer hardcoded
 START_YEAR = 2026                    # fix rahega, kabhi mat badlo
 
@@ -64,11 +64,11 @@ _window = None
 
 
 def _load_logo(max_w=280, max_h=100):
-    """Logo from logo.png (the same file the tray icon uses), or None."""
+    """Logo from logo.ico (the same file the tray icon uses), or None."""
     if Image is None:
         return None
     try:
-        picture = Image.open(style.resource_path("logo.png")).convert("RGBA")
+        picture = Image.open(style.resource_path("logo.ico")).convert("RGBA")
         picture.thumbnail((max_w, max_h), Image.LANCZOS)
         return ImageTk.PhotoImage(picture)
     except Exception as error:

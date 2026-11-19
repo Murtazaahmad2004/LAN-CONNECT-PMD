@@ -4,7 +4,7 @@ import subprocess
 import sys
 from datetime import datetime
 
-APP_FOLDER_NAME = "NEXO LAN Messenger"
+APP_FOLDER_NAME = "Nexo Lan Messenger"
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 

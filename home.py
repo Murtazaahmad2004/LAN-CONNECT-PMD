@@ -939,7 +939,7 @@ def home_page(user_email):
     style.save_preference(state["theme_mode"])
 
     win = tk.Tk()
-    win.title("NEXO LAN Messenger")
+    win.title("Nexo Lan Messenger")
     style.set_app_icon(win)
     style.center_window(win)
     win.configure(bg=style.BG)
@@ -2408,9 +2408,9 @@ def home_page(user_email):
 
         if tray_icon is None:
             tray_icon = pystray.Icon(
-                "NEXO LAN Messenger",
+                "Nexo Lan Messenger",
                 create_tray_image(),
-                "NEXO LAN Messenger",
+                "Nexo Lan Messenger",
                 build_tray_menu()
             )
 
@@ -2425,49 +2425,71 @@ def home_page(user_email):
 
     menu_items = [
         ("⚙", "Settings", open_settings_window),
-        ("📥", "Received Files", open_received_files_folder),
-        ("💬", "Message History", lambda: history_viewer.open_history(
+        ("⇩", "Received Files", open_received_files_folder),
+        ("◷", "Message History", lambda: history_viewer.open_history(
             win, DB_NAME, local_username, select=active_chat["username"])),
-        ("📁", "Shared Files", lambda: sharedfiles.open_shared_files(
+        ("▣", "Shared Files", lambda: sharedfiles.open_shared_files(
             win, DB_NAME, local_username, discovery)),
-        ("❓", "Help", lambda: manual.open_manual(win)),
+        ("?", "Help", lambda: manual.open_manual(win)),
         ("ⓘ", "About", lambda: about.open_about(win)),
         ("⇥", "Logout", open_logout),
     ]
 
     def make_icon_button(icon, tip, command):
+        icon_colors = {
+            "Settings": "#64748B",
+            "Received Files": "#0EA5E9",
+            "Message History": "#8B5CF6",
+            "Shared Files": "#10B981",
+            "Help": "#F59E0B",
+            "About": "#64748B",
+            "Logout": "#EF4444",
+            "Theme": "#D97706"
+        }
+        icon_color = icon_colors.get(tip, "#64748B")
+
         btn = tk.Button(
             top_menu_frame,
             text=icon,
-            font=("Segoe UI Symbol", 15),
+            font=("Segoe UI Symbol", 16, "bold"),
             bg=style.CARD,
-            fg=style.WHITE,
-            activebackground=style.CARD,
-            activeforeground=style.ACCENT,
+            fg=icon_color,
             relief="flat",
             bd=0,
             cursor="hand2",
-            width=4,
-            pady=0,
+            width=2, padx=4, pady=0,
             command=command
         )
-        style.hover_text(btn)
+
+        btn.bind(
+            "<Leave>",
+            lambda event: btn.config(
+                bg=style.CARD,
+                fg=icon_color
+            )
+        )
+
         ToolTip(btn, tip)
         return btn
 
     def add_separator(side):
-       tk.Frame(
-            top_menu_frame, bg=style.BORDER, width=1, height=18
-        ).pack(side=side, padx=6, pady=5)
+        tk.Frame(
+            top_menu_frame,
+            bg=style.BORDER,
+            width=1,
+            height=14
+        ).pack(side=side, padx=6, pady=2)
 
     for icon_text, item_title, screen_function in menu_items:
-        make_icon_button(icon_text, item_title, screen_function).pack(
-            side="left", padx=2, pady=3
-        )
-        add_separator("left")
+        make_icon_button(
+            icon_text,
+            item_title,
+            screen_function
+        ).pack(side="left", padx=1, pady=0)
 
-    theme_btn = make_icon_button("🌓", "Theme", show_theme_menu)
-    theme_btn.pack(side="right", padx=2, pady=3)
+    theme_btn = make_icon_button("◐", "Theme", show_theme_menu)
+    theme_btn.pack(side="right", padx=1, pady=0)
+
     add_separator("right")
 
     win.bind_all("<KeyPress>", mark_activity)
@@ -2485,10 +2507,9 @@ def home_page(user_email):
 
     render_users()
 
-    print("[HOME] NEXO LAN Messenger started successfully.")
+    print("[HOME] Nexo Lan Messenger started successfully.")
 
     win.mainloop()
-
 
 if __name__ == "__main__":
     from login import show_login

@@ -9,6 +9,28 @@ from tkinter import ttk
 
 
 # ------------------------------------------------------------------ fonts
+def _load_bundled_fonts():
+    """Make the Poppins font files in the `fonts` folder usable by this app only
+    (Windows, no install needed). Other systems just use the fallback fonts."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        folder = os.path.join(base, "fonts")
+        FR_PRIVATE = 0x10
+        for name in ("Poppins-Regular.ttf", "Poppins-Bold.ttf"):
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                ctypes.windll.gdi32.AddFontResourceExW(path, FR_PRIVATE, 0)
+    except Exception:
+        pass
+
+
+_load_bundled_fonts()
+
+
 def _installed_families():
     """Names of the fonts installed on this computer (lower case -> real name)."""
     try:
@@ -36,12 +58,13 @@ def _pick(candidates, fallback):
 # Best clean UI font available on the computer
 # (Windows: Segoe UI, macOS: SF / Helvetica Neue, Linux: Noto / Ubuntu / DejaVu)
 FONT = _pick(
-    ["Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans",
+    ["Poppins", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans",
      "Ubuntu", "DejaVu Sans", "Arial"],
     "Segoe UI",
 )
 
-# "Segoe UI Semibold" is a refined heading weight (nicer than plain bold)
+# "Segoe UI Semibold" is a refined heading weight (only used with Segoe UI;
+# Poppins uses its own Bold)
 _SEMIBOLD = (
     _pick(["Segoe UI Semibold"], None)
     if FONT.lower().startswith("segoe") else None

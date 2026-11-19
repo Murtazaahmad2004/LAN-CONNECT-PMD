@@ -516,25 +516,29 @@ def _col(name, default):
 # If neither font is installed, the old Unicode symbols are used instead.
 # --------------------------------------------------------------------------
 ICONS = {
-    "upload":   ("\uE898", "⬆"),
-    "download": ("\uE896", "⬇"),
-    "refresh":  ("\uE72C", "↻"),
-    "delete":   ("\uE74D", "🗑"),
-    "search":   ("\uE721", "🔎"),
-    "close":    ("\uE711", "✕"),
+    "upload":   ("⇧", "⇧"),
+    "download": ("⇩", "⇩"),
+    "refresh":  ("↻", "↻"),
+    "delete":   ("🗑", "🗑"),
+    "search":   ("⌕", "⌕"),
+    "close":    ("✕", "✕"),
 }
 
 
-def icon_font(size=14):
-    """Returns ((family, size), has_pro_font)."""
-    try:
-        families = set(tkfont.families())
-    except tk.TclError:
-        families = set()
-    for name in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
-        if name in families:
-            return (name, size), True
-    return ("Segoe UI Symbol", size), False
+# Colour of every icon (same colours as the toolbar on the home screen)
+ICON_COLORS = {
+    "upload":   "#10B981",    # green
+    "download": "#0EA5E9",    # sky blue
+    "refresh":  "#8B5CF6",    # purple
+    "delete":   "#EF4444",    # red
+    "search":   "#64748B",    # slate
+    "close":    "#64748B",    # slate (turns red on hover)
+}
+
+
+def icon_font(size=16):
+    """Same icon font as the toolbar of the home screen: ((family, size, weight), False)."""
+    return ("Segoe UI Symbol", size, "bold"), False
 
 
 class Tooltip:
@@ -575,7 +579,7 @@ class Tooltip:
             self.tip.wm_attributes("-topmost", True)
             self.tip.wm_geometry(f"+{x}+{y}")
             tk.Label(self.tip, text=self.text, bg="#1f2937", fg="#ffffff",
-                     font=("Segoe UI", 9), padx=8, pady=4, bd=0).pack()
+                     font=(_col("FONT", "Segoe UI"), 9), padx=8, pady=4, bd=0).pack()
         except tk.TclError:
             self.tip = None
 
@@ -632,20 +636,18 @@ class SharedFilesWindow:
     def glyph(self, key):
         return ICONS[key][0] if self.pro else ICONS[key][1]
 
-    def icon_button(self, parent, key, tip, cmd, danger=False, size=14, pady=9):
-        hover_fg = self.DANGER if danger else self.ACCENT
+    def icon_button(self, parent, key, tip, cmd, danger=False, size=16, pady=4):
+        color = ICON_COLORS.get(key, self.MUTED)
         b = tk.Button(parent, text=self.glyph(key), command=cmd, relief="flat", bd=0,
-                      bg=self.CARD, fg=self.TEXT, cursor="hand2",
-                      activebackground=self.HOVER, activeforeground=hover_fg,
-                      font=icon_font(size)[0], width=3, pady=pady)
-        b.bind("<Enter>", lambda e: b.config(fg=hover_fg, bg=self.HOVER), add="+")
-        b.bind("<Leave>", lambda e: b.config(fg=self.TEXT, bg=self.CARD), add="+")
+                      bg=self.CARD, fg=color, cursor="hand2",
+                      activebackground=self.CARD, activeforeground=color,
+                      font=icon_font(size)[0], width=2, padx=2, pady=pady)
         Tooltip(b, tip)
         return b
 
     # ---------------- layout ----------------
     def build_toolbar(self):
-        _font, self.pro = icon_font(14)
+        _font, self.pro = icon_font()
 
         bar = tk.Frame(self.top, bg=self.CARD)
         bar.pack(fill="x")
@@ -653,23 +655,21 @@ class SharedFilesWindow:
 
         def sep():
             tk.Frame(bar, bg=self.BORDER, width=1).pack(
-                side="left", fill="y", pady=8, padx=6)
+                side="left", fill="y", pady=8, padx=3)
 
         self.icon_button(bar, "upload", "Upload files", self.upload
-                         ).pack(side="left", padx=(8, 2))
+                         ).pack(side="left", padx=(8, 0))
         self.icon_button(bar, "download", "Download selected", self.download_selected
-                         ).pack(side="left", padx=2)
-        sep()
+                         ).pack(side="left", padx=0)
         self.icon_button(bar, "refresh", "Refresh / Sync now", self.refresh
-                         ).pack(side="left", padx=2)
-        sep()
+                         ).pack(side="left", padx=0)
         self.icon_button(bar, "delete", "Remove selected file", self.remove_selected,
-                         danger=True).pack(side="left", padx=2)
+                         danger=True).pack(side="left", padx=0)
 
         right = tk.Frame(bar, bg=self.CARD)
         right.pack(side="right", padx=10)
-        tk.Label(right, text=self.glyph("search"), bg=self.CARD, fg=self.MUTED,
-                 font=icon_font(13)[0]).pack(side="left", padx=(0, 6))
+        tk.Label(right, text=self.glyph("search"), bg=self.CARD, fg=ICON_COLORS["search"],
+                 font=icon_font(16)[0]).pack(side="left", padx=(0, 6))
         self.search = tk.StringVar()
         tk.Entry(right, textvariable=self.search, width=28, relief="flat",
                  bg=_col("INPUT_BG", "#ffffff"), fg=_col("BLACK", "#000000"),
@@ -713,11 +713,11 @@ class SharedFilesWindow:
         self.status.pack(side="left")
 
         self.close_btn = self.icon_button(bottom, "close", "Close window", self.close,
-                                          danger=True, size=12, pady=4)
+                                          danger=True, size=14, pady=2)
         self.close_btn.pack(side="right", padx=2)
 
         self.cancel_btn = self.icon_button(bottom, "close", "Cancel transfer",
-                                           self.cancel.set, danger=True, size=12, pady=4)
+                                           self.cancel.set, danger=True, size=14, pady=2)
         self.bar = ttk.Progressbar(bottom, maximum=100, length=220)
 
     # ---------------- helpers ----------------
