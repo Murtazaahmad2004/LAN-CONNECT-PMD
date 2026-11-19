@@ -1,0 +1,11 @@
+# user data (har PC ka apna)
+lan_connect_project.db
+network_settings.json
+theme_pref.json
+shared_files/
+
+# Python / build
+__pycache__/
+*.pyc
+build/
+dist/
