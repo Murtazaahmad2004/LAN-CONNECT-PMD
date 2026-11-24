@@ -19,6 +19,11 @@ except ImportError:
     style = None
 
 try:
+    import icons            # coloured toolbar icons (same as the home screen)
+except ImportError:
+    icons = None
+
+try:
     from discovery import CHAT_PORT
 except Exception:
     CHAT_PORT = 50505          # fallback only, if discovery.py cannot be imported
@@ -512,8 +517,8 @@ def _col(name, default):
 
 
 # --------------------------------------------------------------------------
-# Icons: Segoe Fluent Icons / Segoe MDL2 Assets glyphs (Windows 10/11).
-# If neither font is installed, the old Unicode symbols are used instead.
+# Icons are drawn by icons.py (same coloured icons as the home screen).
+# The symbols below are only used if icons.py / Pillow is not available.
 # --------------------------------------------------------------------------
 ICONS = {
     "upload":   ("⇧", "⇧"),
@@ -636,12 +641,39 @@ class SharedFilesWindow:
     def glyph(self, key):
         return ICONS[key][0] if self.pro else ICONS[key][1]
 
+    def icon_picture(self, key, size, color=None):
+        """The drawn icon (tk image) or None when icons.py is not available."""
+        if icons is None:
+            return None
+        try:
+            return icons.get(key, size, color)
+        except Exception as error:      # e.g. an old icons.py: use the text symbol
+            print("[ICONS] Could not load icon", key, ":", error)
+            return None
+
     def icon_button(self, parent, key, tip, cmd, danger=False, size=16, pady=4):
+        px = 20 if size >= 16 else 16           # icon size in pixels
+        picture = self.icon_picture(key, px)
         color = ICON_COLORS.get(key, self.MUTED)
-        b = tk.Button(parent, text=self.glyph(key), command=cmd, relief="flat", bd=0,
-                      bg=self.CARD, fg=color, cursor="hand2",
-                      activebackground=self.CARD, activeforeground=color,
-                      font=icon_font(size)[0], width=2, padx=2, pady=pady)
+
+        if picture is not None:
+            b = tk.Button(parent, image=picture, command=cmd, relief="flat", bd=0,
+                          bg=self.CARD, activebackground=self.HOVER, cursor="hand2",
+                          highlightthickness=0, padx=7, pady=pady + 1)
+            b.image = picture                   # keep a reference
+            hover_picture = self.icon_picture(key, px, "#dc2626") if danger else None
+            b.bind("<Enter>", lambda e: b.config(
+                bg=self.HOVER, **({"image": hover_picture} if hover_picture else {})),
+                add="+")
+            b.bind("<Leave>", lambda e: b.config(
+                bg=self.CARD, **({"image": picture} if hover_picture else {})),
+                add="+")
+            b.hover_image = hover_picture       # keep a reference
+        else:
+            b = tk.Button(parent, text=self.glyph(key), command=cmd, relief="flat",
+                          bd=0, bg=self.CARD, fg=color, cursor="hand2",
+                          activebackground=self.CARD, activeforeground=color,
+                          font=icon_font(size)[0], width=2, padx=2, pady=pady)
         Tooltip(b, tip)
         return b
 
@@ -654,22 +686,32 @@ class SharedFilesWindow:
         tk.Frame(self.top, bg=self.BORDER, height=1).pack(fill="x")
 
         def sep():
+            """Thin vertical line between two icons."""
             tk.Frame(bar, bg=self.BORDER, width=1).pack(
-                side="left", fill="y", pady=8, padx=3)
+                side="left", fill="y", pady=10, padx=3)
 
         self.icon_button(bar, "upload", "Upload files", self.upload
                          ).pack(side="left", padx=(8, 0))
+        sep()
         self.icon_button(bar, "download", "Download selected", self.download_selected
                          ).pack(side="left", padx=0)
+        sep()
         self.icon_button(bar, "refresh", "Refresh / Sync now", self.refresh
                          ).pack(side="left", padx=0)
+        sep()
         self.icon_button(bar, "delete", "Remove selected file", self.remove_selected,
                          danger=True).pack(side="left", padx=0)
 
         right = tk.Frame(bar, bg=self.CARD)
         right.pack(side="right", padx=10)
-        tk.Label(right, text=self.glyph("search"), bg=self.CARD, fg=ICON_COLORS["search"],
-                 font=icon_font(16)[0]).pack(side="left", padx=(0, 6))
+        search_picture = self.icon_picture("search", 18)
+        if search_picture is not None:
+            search_icon = tk.Label(right, image=search_picture, bg=self.CARD)
+            search_icon.image = search_picture
+        else:
+            search_icon = tk.Label(right, text=self.glyph("search"), bg=self.CARD,
+                                   fg=ICON_COLORS["search"], font=icon_font(16)[0])
+        search_icon.pack(side="left", padx=(0, 6))
         self.search = tk.StringVar()
         tk.Entry(right, textvariable=self.search, width=28, relief="flat",
                  bg=_col("INPUT_BG", "#ffffff"), fg=_col("BLACK", "#000000"),

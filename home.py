@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import uuid
 from datetime import datetime, timezone
 from tkinter import filedialog, messagebox, ttk
@@ -24,7 +25,7 @@ import history_viewer
 import sharedfiles
 import groupchat
 import about
-import manual
+import icons
 
 # Optional spell checker:  pip install pyspellchecker
 try:
@@ -112,7 +113,6 @@ def get_chat_history(local_username, peer_username):
     finally:
         conn.close()
 
-
 def get_registered_usernames():
     conn = sqlite3.connect(DB_NAME, timeout=30)
     try:
@@ -131,7 +131,6 @@ def get_registered_usernames():
         return usernames
     finally:
         conn.close()
-
 
 class MessageService:
 
@@ -944,7 +943,7 @@ def home_page(user_email):
     style.center_window(win)
     win.configure(bg=style.BG)
     style.setup_ttk(win)
-    theme_var = tk.StringVar(value=state["theme_mode"])    
+    
 
     create_chat_table()
     sharedfiles.init(DB_NAME)
@@ -1011,9 +1010,6 @@ def home_page(user_email):
     theme_after_id = None
     tray_icon = None
     message_service = None
-
-    header = tk.Frame(win, bg=style.ACCENT, height=3)
-    header.pack(fill="x")
 
     top_menu_frame = tk.Frame(win, bg=style.CARD)
     top_menu_frame.pack(fill="x")
@@ -2208,8 +2204,7 @@ def home_page(user_email):
             sound_incoming_file=bool(new.get("sound_incoming_file", 1)),
             sound_incoming_call=bool(new.get("sound_incoming_call", 1)),
         )
-        
-        theme_var.set(state["theme_mode"])
+
         apply_chat_fonts()      # font size changes live in the open chat
         check_spelling()        # spell checking on/off live
         apply_network_config()  # new broadcasts / network tag take effect now
@@ -2235,36 +2230,23 @@ def home_page(user_email):
             on_save=on_settings_saved
         )
 
-    def choose_theme(mode):
+    def toggle_theme():
+        new_mode = (
+            "Dark"
+            if style.CURRENT_THEME == "Light"
+            else "Light"
+        )
+
         try:
             saved = settings.load_settings(user_email)
-            saved["theme"] = mode
+            saved["theme"] = new_mode
             settings.save_settings(user_email, saved)
         except Exception as e:
             print("[THEME] Save error:", e)
 
-        state["theme_mode"] = mode
-        theme_var.set(mode)
-        style.apply_theme(win, mode)
-        style.save_preference(mode)
-
-    def show_theme_menu():
-        menu = tk.Menu(win, tearoff=0)
-        theme_var.set(state["theme_mode"])
-        for name in style.THEME_NAMES:
-            menu.add_radiobutton(
-                label=name,
-                variable=theme_var,
-                value=name,
-                command=lambda n=name: choose_theme(n)
-            )
-        try:
-            menu.tk_popup(
-                theme_btn.winfo_rootx(),
-                theme_btn.winfo_rooty() + theme_btn.winfo_height()
-            )
-        finally:
-            menu.grab_release()
+        state["theme_mode"] = new_mode
+        style.apply_theme(win, new_mode)
+        style.save_preference(new_mode)
 
     def stop_tray():
         nonlocal tray_icon
@@ -2423,73 +2405,70 @@ def home_page(user_email):
         from login import show_login
         show_login()
 
+    # Toolbar icons are drawn by icons.py (coloured, flat).  If they cannot be
+    # made, this text symbol is shown instead.
+    ICON_SIZE = 20
+    FALLBACK_SYMBOLS = {
+        "settings": "⚙", "received": "📥", "history": "💬", "shared": "📁",
+        "help": "❓", "about": "ⓘ", "logout": "⇥", "theme": "🌓",
+    }
+
     menu_items = [
-        ("⚙", "Settings", open_settings_window),
-        ("⇩", "Received Files", open_received_files_folder),
-        ("◷", "Message History", lambda: history_viewer.open_history(
+        ("settings", "Settings", open_settings_window),
+        ("received", "Received Files", open_received_files_folder),
+        ("history", "Message History", lambda: history_viewer.open_history(
             win, DB_NAME, local_username, select=active_chat["username"])),
-        ("▣", "Shared Files", lambda: sharedfiles.open_shared_files(
+        ("shared", "Shared Files", lambda: sharedfiles.open_shared_files(
             win, DB_NAME, local_username, discovery)),
-        ("?", "Help", lambda: manual.open_manual(win)),
-        ("ⓘ", "About", lambda: about.open_about(win)),
-        ("⇥", "Logout", open_logout),
+        ("help", "Help", open_help),
+        ("about", "About", lambda: about.open_about(win)),
+        ("logout", "Logout", open_logout),
     ]
 
-    def make_icon_button(icon, tip, command):
-        icon_colors = {
-            "Settings": "#64748B",
-            "Received Files": "#0EA5E9",
-            "Message History": "#8B5CF6",
-            "Shared Files": "#10B981",
-            "Help": "#F59E0B",
-            "About": "#64748B",
-            "Logout": "#EF4444",
-            "Theme": "#D97706"
-        }
-        icon_color = icon_colors.get(tip, "#64748B")
-
-        btn = tk.Button(
-            top_menu_frame,
-            text=icon,
-            font=("Segoe UI Symbol", 16, "bold"),
+    def make_icon_button(key, tip, command):
+        picture = icons.get(key, ICON_SIZE)
+        options = dict(
             bg=style.CARD,
-            fg=icon_color,
+            activebackground=style.BG,
             relief="flat",
             bd=0,
             cursor="hand2",
-            width=2, padx=4, pady=0,
+            highlightthickness=0,
             command=command
         )
 
-        btn.bind(
-            "<Leave>",
-            lambda event: btn.config(
-                bg=style.CARD,
-                fg=icon_color
+        if picture is not None:
+            btn = tk.Button(
+                top_menu_frame, image=picture, padx=7, pady=4, **options
             )
-        )
+            btn.image = picture              # keep a reference
+        else:
+            btn = tk.Button(
+                top_menu_frame, text=FALLBACK_SYMBOLS[key],
+                font=("Segoe UI Symbol", 14), fg=style.WHITE,
+                activeforeground=style.ACCENT, width=3, pady=0, **options
+            )
+            style.hover_text(btn)
 
+        # soft background under the icon while the mouse is on it
+        btn.bind("<Enter>", lambda e: btn.config(bg=style.BG), add="+")
+        btn.bind("<Leave>", lambda e: btn.config(bg=style.CARD), add="+")
         ToolTip(btn, tip)
         return btn
 
     def add_separator(side):
         tk.Frame(
-            top_menu_frame,
-            bg=style.BORDER,
-            width=1,
-            height=14
-        ).pack(side=side, padx=6, pady=2)
+            top_menu_frame, bg=style.BORDER, width=1, height=16
+        ).pack(side=side, padx=3, pady=0)
 
-    for icon_text, item_title, screen_function in menu_items:
-        make_icon_button(
-            icon_text,
-            item_title,
-            screen_function
-        ).pack(side="left", padx=1, pady=0)
+    for icon_key, item_title, screen_function in menu_items:
+        make_icon_button(icon_key, item_title, screen_function).pack(
+            side="left", padx=0, pady=3
+        )
+        add_separator("left")
 
-    theme_btn = make_icon_button("◐", "Theme", show_theme_menu)
-    theme_btn.pack(side="right", padx=1, pady=0)
-
+    theme_btn = make_icon_button("theme", "Theme", toggle_theme)
+    theme_btn.pack(side="right", padx=0, pady=0)
     add_separator("right")
 
     win.bind_all("<KeyPress>", mark_activity)
