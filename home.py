@@ -939,12 +939,11 @@ def home_page(user_email):
 
     win = tk.Tk()
     win.title("Nexo Lan Messenger")
+    win.configure(bg=style.BG)
     style.set_app_icon(win)
     style.center_window(win)
-    win.configure(bg=style.BG)
     style.setup_ttk(win)
     
-
     create_chat_table()
     sharedfiles.init(DB_NAME)
     groupchat.init(DB_NAME)
@@ -1010,6 +1009,8 @@ def home_page(user_email):
     theme_after_id = None
     tray_icon = None
     message_service = None
+    PANEL_FONT = style.ui_font(11)
+    PANEL_FONT_BOLD = PANEL_FONT
 
     top_menu_frame = tk.Frame(win, bg=style.CARD)
     top_menu_frame.pack(fill="x")
@@ -1037,15 +1038,6 @@ def home_page(user_email):
     )
     users_frame.pack(side="left", fill="y", before=content_frame)
     users_frame.pack_propagate(False)
-
-    tk.Label(
-        users_frame,
-        text="LAN Users",
-        font=style.ui_font(11, True),
-        bg=style.CARD,
-        fg=style.WHITE,
-        anchor="w"
-    ).pack(fill="x", padx=10, pady=8)
 
     online_users_frame = tk.Frame(users_frame, bg=style.CARD)
     online_users_frame.pack(fill="both", expand=True)
@@ -1902,7 +1894,7 @@ def home_page(user_email):
 
         icon = tk.Label(
             row, text="👥", bg=style.CARD, fg=style.ACCENT,
-            font=style.ui_font(11), cursor="hand2"
+            font=PANEL_FONT, cursor="hand2"
         )
         icon.pack(side="left", padx=(0, 7))
 
@@ -1910,7 +1902,7 @@ def home_page(user_email):
             row,
             text=f"{groupchat.GROUP_NAME}  ({count})" if count
             else groupchat.GROUP_NAME,
-            font=style.ui_font(11, True),
+            font=style.ui_font(10, True),
             bg=style.CARD,
             fg=style.ACCENT if count else style.WHITE,
             cursor="hand2",
@@ -1924,6 +1916,15 @@ def home_page(user_email):
         tk.Frame(online_users_frame, bg=style.BORDER, height=1).pack(
             fill="x", padx=10, pady=(4, 2)
         )
+
+        tk.Label(
+            online_users_frame,
+            text="Lan Users",
+            font=style.ui_font(10, True),
+            bg=style.CARD,
+            fg=style.WHITE,
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=(8, 4))
 
     def render_users():
         for widget in online_users_frame.winfo_children():
@@ -1948,9 +1949,11 @@ def home_page(user_email):
             tk.Label(
                 online_users_frame,
                 text="No users to show",
+                font=style.ui_font(9, True),
                 bg=style.CARD,
-                fg=style.MUTED
-            ).pack(anchor="w", padx=10, pady=5)
+                fg=style.MUTED,
+                anchor="w"
+            ).pack(fill="x", padx=10, pady=5)
             return
 
         status_order = {
@@ -1993,7 +1996,7 @@ def home_page(user_email):
             name_label = tk.Label(
                 row,
                 text=f"{username}  ({count})" if count else username,
-                font=style.ui_font(11, bool(count)),
+                font=PANEL_FONT_BOLD if count else PANEL_FONT,
                 bg=style.CARD,
                 fg=style.ACCENT if count else style.WHITE,
                 cursor="hand2",
@@ -2230,13 +2233,8 @@ def home_page(user_email):
             on_save=on_settings_saved
         )
 
-    def toggle_theme():
-        new_mode = (
-            "Dark"
-            if style.CURRENT_THEME == "Light"
-            else "Light"
-        )
-
+    def choose_theme(new_mode):
+        """Applies the theme picked from the theme list."""
         try:
             saved = settings.load_settings(user_email)
             saved["theme"] = new_mode
@@ -2247,6 +2245,25 @@ def home_page(user_email):
         state["theme_mode"] = new_mode
         style.apply_theme(win, new_mode)
         style.save_preference(new_mode)
+
+    def show_theme_menu():
+        """Theme icon click: opens the list of themes under the icon."""
+        menu = tk.Menu(win, tearoff=0)
+        current = state["theme_mode"]
+
+        for name in style.THEME_NAMES:
+            label = f"✔  {name}" if name == current else f"     {name}"
+            menu.add_command(
+                label=label,
+                command=lambda n=name: choose_theme(n)
+            )
+
+        try:
+            x = theme_btn.winfo_rootx()
+            y = theme_btn.winfo_rooty() + theme_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     def stop_tray():
         nonlocal tray_icon
@@ -2467,7 +2484,7 @@ def home_page(user_email):
         )
         add_separator("left")
 
-    theme_btn = make_icon_button("theme", "Theme", toggle_theme)
+    theme_btn = make_icon_button("theme", "Theme", show_theme_menu)
     theme_btn.pack(side="right", padx=0, pady=0)
     add_separator("right")
 
